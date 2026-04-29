@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Music bot runtime files
+.env
+songs.db
+songs/*
+!songs/.gitkeep
+__pycache__/
