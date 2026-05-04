@@ -500,9 +500,23 @@ async def cmd_now_playing(interaction: discord.Interaction) -> None:
 
 @bot.tree.command(
     name="play_broadcast",
-    description="Immediately play the next radio broadcast clip for today (Music Manager only).",
+    description=(
+        "Play a radio broadcast clip (Music Manager only). "
+        "Optionally specify a day (MON–SUN) and/or clip number."
+    ),
 )
-async def cmd_play_broadcast(interaction: discord.Interaction) -> None:
+@app_commands.describe(
+    day=(
+        "Day of the week to use (MON, TUE, WED, THR, FRI, SAT, SUN). "
+        "Defaults to today."
+    ),
+    clip="Specific clip number to play. Defaults to the next sequential clip.",
+)
+async def cmd_play_broadcast(
+    interaction: discord.Interaction,
+    day: str | None = None,
+    clip: int | None = None,
+) -> None:
     if not is_music_manager(interaction):
         await interaction.response.send_message(
             "❌ You need the **Music Manager** role to trigger a broadcast.",
@@ -524,38 +538,102 @@ async def cmd_play_broadcast(interaction: discord.Interaction) -> None:
         )
         return
 
-    day = scheduler.today_name()
-    total = scheduler.total_clips(day)
-    remaining = scheduler.clips_remaining(day)
+    # ── Resolve target day ────────────────────────────────────────────
+    _DAY_ABBREVS: dict[str, str] = {
+        "MON": "monday",
+        "TUE": "tuesday",
+        "WED": "wednesday",
+        "THR": "thursday",
+        "FRI": "friday",
+        "SAT": "saturday",
+        "SUN": "sunday",
+    }
+
+    if day is None:
+        target_day = scheduler.today_name()
+    else:
+        target_day = _DAY_ABBREVS.get(day.upper())
+        if target_day is None:
+            await interaction.response.send_message(
+                f"❌ `{day}` is not a valid day abbreviation.\n"
+                "Use one of: **MON TUE WED THR FRI SAT SUN**",
+                ephemeral=True,
+            )
+            return
+
+    total = scheduler.total_clips(target_day)
+
+    # ── Case: specific clip number requested ──────────────────────────
+    if clip is not None:
+        if total == 0:
+            await interaction.response.send_message(
+                f"❌ There are no broadcast clips for **{target_day}**.\n"
+                f"Add audio files to `radio/{target_day}/` named `01.mp3`, `02.mp3`, …",
+                ephemeral=True,
+            )
+            return
+
+        if clip < 1 or clip > total:
+            await interaction.response.send_message(
+                f"❌ Clip **{clip}** does not exist for **{target_day}**.\n"
+                f"That day has **{total}** clip(s) — valid range: 1–{total}.",
+                ephemeral=True,
+            )
+            return
+
+        clip_path = scheduler.consume_clip_at(target_day, clip)
+        if clip_path is None:
+            await interaction.response.send_message(
+                f"❌ Clip **{clip}** for **{target_day}** is missing from disk.\n"
+                f"Expected it at `radio/{target_day}/` — please check the file exists.",
+                ephemeral=True,
+            )
+            return
+
+        started = await bot.player.play_broadcast_now(clip_path=clip_path)
+        if started:
+            await interaction.response.send_message(
+                f"📻 Playing broadcast clip **{clip}** of **{total}** for **{target_day}**.",
+                ephemeral=True,
+            )
+            log.info(
+                "Manual broadcast (specific) triggered by user %d: clip %d/%d for %s",
+                interaction.user.id, clip, total, target_day,
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ Could not start the broadcast clip.", ephemeral=True
+            )
+        return
+
+    # ── Case: next sequential clip ────────────────────────────────────
+    remaining = scheduler.clips_remaining(target_day)
 
     if remaining == 0:
         if total == 0:
             await interaction.response.send_message(
-                f"❌ No broadcast clips found for **{day}**.\n"
-                f"Add audio files to `radio/{day}/` named `01.mp3`, `02.mp3`, …",
+                f"❌ No broadcast clips found for **{target_day}**.\n"
+                f"Add audio files to `radio/{target_day}/` named `01.mp3`, `02.mp3`, …",
                 ephemeral=True,
             )
         else:
             await interaction.response.send_message(
-                f"📻 All **{total}** broadcast clip(s) for **{day}** have already played this week.\n"
+                f"📻 All **{total}** broadcast clip(s) for **{target_day}** have already played this week.\n"
                 f"They will reset at the start of next week.",
                 ephemeral=True,
             )
         return
 
-    clip_number = scheduler.next_clip_number(day)
+    clip_number = scheduler.next_clip_number(target_day)
     started = await bot.player.play_broadcast_now()
     if started:
         await interaction.response.send_message(
-            f"📻 Playing broadcast clip **{clip_number}** of **{total}** for **{day}**.",
+            f"📻 Playing broadcast clip **{clip_number}** of **{total}** for **{target_day}**.",
             ephemeral=True,
         )
         log.info(
             "Manual broadcast triggered by user %d: clip %d/%d for %s",
-            interaction.user.id,
-            clip_number,
-            total,
-            day,
+            interaction.user.id, clip_number, total, target_day,
         )
     else:
         await interaction.response.send_message(

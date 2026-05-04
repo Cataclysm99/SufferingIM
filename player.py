@@ -20,6 +20,7 @@ immediately by a Music Manager via /play_broadcast.
 import asyncio
 import logging
 import random
+from pathlib import Path
 from typing import Optional
 
 import discord
@@ -58,6 +59,10 @@ class MusicPlayer:
         # When True, the next play_next() call plays a broadcast clip immediately,
         # bypassing the interval counter and user-count check.
         self._force_broadcast: bool = False
+
+        # When set, _play_broadcast_clip will use this path directly instead of
+        # calling consume_next_clip().  Cleared immediately after use.
+        self._forced_clip_path: Optional[Path] = None
 
     # ------------------------------------------------------------------
     # Configuration
@@ -103,6 +108,8 @@ class MusicPlayer:
     async def _play_broadcast_clip(self) -> bool:
         """Consume the next broadcast clip for today and start playing it.
 
+        If ``_forced_clip_path`` is set it is used directly (and cleared)
+        instead of consuming the next sequential clip.
         Resets the song-since-broadcast counter.
         Returns True if a clip was started, False if no clip is available
         or the voice client is not connected.
@@ -112,7 +119,12 @@ class MusicPlayer:
         if self.broadcast is None:
             return False
 
-        clip_path = self.broadcast.consume_next_clip()
+        if self._forced_clip_path is not None:
+            clip_path: Optional[Path] = self._forced_clip_path
+            self._forced_clip_path = None
+        else:
+            clip_path = self.broadcast.consume_next_clip()
+
         if clip_path is None:
             return False
 
@@ -130,8 +142,13 @@ class MusicPlayer:
         log.info("Playing broadcast clip: %s", clip_path.name)
         return True
 
-    async def play_broadcast_now(self) -> bool:
-        """Force the next broadcast clip to play immediately (Music Manager override).
+    async def play_broadcast_now(
+        self, clip_path: Optional[Path] = None
+    ) -> bool:
+        """Force a broadcast clip to play immediately (Music Manager override).
+
+        If *clip_path* is provided that exact file is played; otherwise the
+        next sequential clip for today is used.
 
         If a song is currently playing it is stopped first; the ``_after``
         callback then picks up the broadcast via the ``_force_broadcast`` flag
@@ -143,8 +160,14 @@ class MusicPlayer:
             return False
         if self.broadcast is None:
             return False
-        if self.broadcast.peek_next_clip() is None:
-            return False
+
+        if clip_path is None:
+            # Sequential mode: make sure there is a next clip.
+            if self.broadcast.peek_next_clip() is None:
+                return False
+        else:
+            # Explicit clip: store it so _play_broadcast_clip picks it up.
+            self._forced_clip_path = clip_path
 
         if self.voice_client.is_playing() or self.voice_client.is_paused():
             # Signal play_next (triggered by the _after of the stopped song)

@@ -215,3 +215,42 @@ class BroadcastScheduler:
         idx = self._state_for(day)["index"]
         clips = self._clips(day)
         return (idx + 1) if idx < len(clips) else 0
+
+    def get_clip_path(self, day: str, clip_number: int) -> Optional[Path]:
+        """Return the path for the 1-based *clip_number* for *day* without
+        changing the sequential index.  Returns ``None`` if out of range.
+        """
+        clips = self._clips(day)
+        idx = clip_number - 1
+        if idx < 0 or idx >= len(clips):
+            return None
+        return clips[idx]
+
+    def consume_clip_at(self, day: str, clip_number: int) -> Optional[Path]:
+        """Play a specific 1-based clip and advance the sequential index past it.
+
+        Sets the next-to-play index to *clip_number* so that the story
+        continues forward from the clip after the one explicitly chosen.
+        Returns ``None`` if *clip_number* is out of range or the file is missing.
+        """
+        clips = self._clips(day)
+        idx = clip_number - 1
+        if idx < 0 or idx >= len(clips):
+            return None
+        clip = clips[idx]
+        # Advance the sequential index to just after this clip.
+        s = self._state_for(day)
+        s["index"] = idx + 1
+        self._save()
+        if not clip.exists():
+            log.warning(
+                "Broadcast: specific clip %s missing on disk — cannot play.", clip
+            )
+            return None
+        log.info(
+            "Broadcast: serving specific clip %s (sequential index set to %d for %s)",
+            clip.name,
+            s["index"],
+            day,
+        )
+        return clip
