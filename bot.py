@@ -367,7 +367,7 @@ async def cmd_delete_song_id(interaction: discord.Interaction, song_id: int) -> 
         return
 
     msg_content = await _build_delete_confirm_message(
-        song, interaction.user.id, interaction.client
+        song, interaction.user.id, interaction.client, interaction.guild
     )
 
     # Non-ephemeral so reactions can be added.

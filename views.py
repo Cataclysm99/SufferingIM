@@ -49,11 +49,18 @@ REACT_HARD_DELETE = "🗑️"
 # Helpers
 # ---------------------------------------------------------------------------
 
-async def _resolve_username(client: discord.Client, user_id_str: str) -> str:
-    """Return a display name for a Discord user ID string.
+async def _resolve_username(
+    client: discord.Client,
+    user_id_str: str,
+    guild: discord.Guild | None = None,
+) -> str:
+    """Return a display name (preferring server nickname) for a Discord user ID.
 
-    Falls back to the raw ID string when the user cannot be resolved
-    (e.g. empty string, invalid ID, or user not found).
+    Resolution order:
+    1. Guild member's ``display_name`` — server nickname if set, otherwise
+       the member's global display name (requires *guild* to be provided).
+    2. Global ``User.display_name``.
+    3. Raw user ID string (fallback when the user cannot be found at all).
     """
     if not user_id_str:
         return "Unknown"
@@ -62,21 +69,36 @@ async def _resolve_username(client: discord.Client, user_id_str: str) -> str:
     except ValueError:
         return user_id_str
 
+    # Prefer guild member so we get the server-specific nickname.
+    if guild is not None:
+        member = guild.get_member(uid)
+        if member is None:
+            try:
+                member = await guild.fetch_member(uid)
+            except Exception:
+                member = None
+        if member is not None:
+            return member.display_name
+
+    # Fall back to the global User object.
     user = client.get_user(uid)
     if user is None:
         try:
             user = await client.fetch_user(uid)
         except Exception:
             return user_id_str
-    return str(user)
+    return user.display_name
 
 
 async def _build_delete_confirm_message(
-    song: dict, requester_id: int, client: discord.Client
+    song: dict,
+    requester_id: int,
+    client: discord.Client,
+    guild: discord.Guild | None = None,
 ) -> str:
     """Build the non-ephemeral confirmation message used by both the
     name-based delete modal and the ``/delete_song_id`` command."""
-    added_by_display = await _resolve_username(client, song.get("added_by", ""))
+    added_by_display = await _resolve_username(client, song.get("added_by", ""), guild)
     status = "✅ active" if song.get("available", 1) else "⛔ deactivated"
     return (
         f"🎵 **{song['name']}** by **{song['artist']}** "
@@ -214,7 +236,7 @@ class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
         if len(matches) > 1:
             # Resolve all "added by" display names concurrently.
             usernames = await asyncio.gather(
-                *[_resolve_username(interaction.client, m.get("added_by", "")) for m in matches]
+                *[_resolve_username(interaction.client, m.get("added_by", ""), interaction.guild) for m in matches]
             )
 
             lines = []
@@ -245,7 +267,7 @@ class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
 
         song = matches[0]
         msg_content = await _build_delete_confirm_message(
-            song, interaction.user.id, interaction.client
+            song, interaction.user.id, interaction.client, interaction.guild
         )
 
         # Must be non-ephemeral so we can attach reactions.
