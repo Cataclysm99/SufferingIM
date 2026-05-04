@@ -113,6 +113,20 @@ def get_songs_by_name(name: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# Pre-built queries for search_songs — avoids any runtime SQL construction.
+_FIELD_SEARCH_QUERIES: dict[str, str] = {
+    "name": (
+        "SELECT * FROM songs WHERE LOWER(name) LIKE LOWER(?) AND available = 1"
+    ),
+    "artist": (
+        "SELECT * FROM songs WHERE LOWER(artist) LIKE LOWER(?) AND available = 1"
+    ),
+    "added_by": (
+        "SELECT * FROM songs WHERE LOWER(added_by) LIKE LOWER(?) AND available = 1"
+    ),
+}
+
+
 def search_songs(field: str, query: str) -> list[dict]:
     """
     Case-insensitive substring search across *available* songs.
@@ -133,10 +147,8 @@ def search_songs(field: str, query: str) -> list[dict]:
                 "SELECT * FROM songs WHERE id = ? AND available = 1", (sid,)
             ).fetchall()
         else:
-            rows = conn.execute(
-                f"SELECT * FROM songs WHERE LOWER({field}) LIKE LOWER(?) AND available = 1",
-                (f"%{query}%",),
-            ).fetchall()
+            sql = _FIELD_SEARCH_QUERIES[field]
+            rows = conn.execute(sql, (f"%{query}%",)).fetchall()
     return [dict(r) for r in rows]
 
 

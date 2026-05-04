@@ -9,7 +9,7 @@ A **rigged** Discord music bot that shuffles a playlist of local audio files and
 | Shuffle playlist | All songs in the library are shuffled and played in random order. |
 | Rigged song | With 1-in-10 probability the bot silently plays a pre-set song instead of the queued one. |
 | Persistent controller | A button panel posted in a Discord channel survives bot restarts. |
-| Song library | Songs are tracked in SQLite with id, name, author, filename, and times-played. |
+| Song library | Songs are tracked in SQLite with id, name, artist, added\_by, filename, times\_played, and available flag. |
 | File management | Audio files are stored in `songs/` and managed via Discord commands. |
 
 ## Controller Buttons
@@ -17,17 +17,17 @@ A **rigged** Discord music bot that shuffles a playlist of local audio files and
 **Row 1 – Playback**
 | Button | Action |
 |---|---|
-| ▶ Join & Play | Join the user's voice channel and start the shuffled queue. |
+| ▶ Play / Resume | Join the user's voice channel and start the queue, or resume if paused. |
 | ⏸ Pause | Pause the current song. |
-| ▶ Resume | Resume a paused song. |
 | ⏭ Skip | Skip to the next song. |
+| 📞 Leave | Disconnect the bot from the voice channel. |
 
 **Row 2 – Library**
 | Button | Action |
 |---|---|
-| 📋 Song List | Show the song table (id, name, author, plays). |
+| 📋 Song List | Show the active song table (id, name, artist, added by, plays). |
 | ➕ Add Song | Open a modal to register a file already in `songs/`. |
-| 🗑 Delete Song | Open a modal to delete a song by id (also removes the file). |
+| 🗑 Delete Song | Open a modal to start the two-step delete by song name. |
 
 ## Slash Commands
 
@@ -35,9 +35,14 @@ A **rigged** Discord music bot that shuffles a playlist of local audio files and
 |---|---|
 | `/controller` | Post (or re-post) the controller panel in the current channel. |
 | `/upload_song` | Upload an audio file attachment and add it to the library. |
+| `/search` | Search the library by name, artist, added\_by user ID, or song id. |
+| `/songs` | Display all active songs. |
+| `/songs_all` | Display all songs including deactivated ones (admin view). |
+| `/toggle_song` | Activate or deactivate a song by name. |
+| `/toggle_song_id` | Activate or deactivate a song by its unique id. |
+| `/delete_song_id` | Start the two-step delete confirmation for a specific song id. |
 | `/set_rigged song_id` | Set which song is secretly rigged (0 to disable). |
 | `/now_playing` | Show the song currently playing. |
-| `/songs` | Display the full song library table. |
 
 ## Prerequisites
 
@@ -76,13 +81,48 @@ python bot.py
 
 **Option A – Upload via Discord**
 ```
-/upload_song  file:<attach audio>  name:Song Name  author:Artist
+/upload_song  file:<attach audio>  name:Song Name  artist:Artist Name
 ```
 The file is saved to `songs/` and registered in the database automatically.
 
 **Option B – Copy file manually then register**
 1. Copy the audio file to the `songs/` directory on the host machine.
 2. Click **➕ Add Song** in the controller and fill in the modal.
+
+## Managing Songs
+
+### Deleting a song (two-step confirmation)
+
+Click **🗑 Delete Song** or run `/delete_song_id <id>`.  
+The bot posts a confirmation message and adds two reactions:
+
+| Reaction | Effect |
+|---|---|
+| ✅ | **Deactivate** – removes the song from the playlist queue but keeps the database row and audio file. Use `/toggle_song` or `/toggle_song_id` to re-enable it later. |
+| 🗑️ | **Permanently delete** – removes the row from the database **and** deletes the audio file from `songs/`. |
+
+Only the user who triggered the deletion can react to confirm it.
+
+**Duplicate song names:** if more than one song shares the same name the bot shows each match with its unique ID, artist, and the username of who added it, then asks you to use `/delete_song_id <id>` to target the correct one. Reacting on that informational message does *not* delete anything.
+
+### Temporarily removing a song
+
+```
+/toggle_song  name:Song Name
+/toggle_song_id  song_id:3
+```
+
+Toggles `available` between active and deactivated.  Deactivated songs are hidden from the queue and `/search` but their audio file stays on disk, making them easy to re-add without re-uploading.
+
+### Searching the library
+
+```
+/search  field:Artist  query:Queen
+/search  field:Name    query:Bohemian
+/search  field:ID      query:3
+```
+
+If nothing matches you'll get a plain-English clarification, e.g. *"Sorry, there is no artist named Bloopity Bloop bloop."*
 
 ## Rigged Song
 

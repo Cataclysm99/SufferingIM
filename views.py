@@ -21,6 +21,8 @@ DeleteSongModal
 """
 from __future__ import annotations
 
+import asyncio
+
 import discord
 
 from config import SONGS_DIR
@@ -46,6 +48,47 @@ REACT_HARD_DELETE = "🗑️"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+async def _resolve_username(client: discord.Client, user_id_str: str) -> str:
+    """Return a display name for a Discord user ID string.
+
+    Falls back to the raw ID string when the user cannot be resolved
+    (e.g. empty string, invalid ID, or user not found).
+    """
+    if not user_id_str:
+        return "Unknown"
+    try:
+        uid = int(user_id_str)
+    except ValueError:
+        return user_id_str
+
+    user = client.get_user(uid)
+    if user is None:
+        try:
+            user = await client.fetch_user(uid)
+        except Exception:
+            return user_id_str
+    return str(user)
+
+
+async def _build_delete_confirm_message(
+    song: dict, requester_id: int, client: discord.Client
+) -> str:
+    """Build the non-ephemeral confirmation message used by both the
+    name-based delete modal and the ``/delete_song_id`` command."""
+    added_by_display = await _resolve_username(client, song.get("added_by", ""))
+    status = "✅ active" if song.get("available", 1) else "⛔ deactivated"
+    return (
+        f"🎵 **{song['name']}** by **{song['artist']}** "
+        f"(ID: `{song['id']}`, {status})\n"
+        f"Added by: **{added_by_display}**\n\n"
+        f"React with {REACT_DEACTIVATE} to **deactivate** "
+        f"— removes from playlist but keeps the audio file "
+        f"(re-enable later with `/toggle_song` or `/toggle_song_id`).\n"
+        f"React with {REACT_HARD_DELETE} to **permanently delete** "
+        f"— removes from the database **and** deletes the audio file.\n\n"
+        f"Only <@{requester_id}> can confirm this action."
+    )
 
 def _song_table_embed(songs: list[dict], title: str = "🎵 Song Library") -> discord.Embed:
     """Build a nicely formatted embed table for the song library.
@@ -169,27 +212,40 @@ class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
             return
 
         if len(matches) > 1:
-            embed = _song_table_embed(matches, title="🔎 Multiple Matches Found")
-            await interaction.response.send_message(
-                f"Multiple songs named **{query}** were found. "
-                "Use `/search` to identify the exact song, then ask an admin "
-                "to use `/toggle_song_id` or `/songs_all` to manage it.",
-                embed=embed,
-                ephemeral=True,
+            # Resolve all "added by" display names concurrently.
+            usernames = await asyncio.gather(
+                *[_resolve_username(interaction.client, m.get("added_by", "")) for m in matches]
             )
+
+            lines = []
+            for song, username in zip(matches, usernames):
+                status = "✅" if song.get("available", 1) else "⛔"
+                lines.append(
+                    f"{status} ID `{song['id']}` — **{song['name']}** "
+                    f"by **{song['artist']}** — added by **{username}**"
+                )
+
+            embed = discord.Embed(
+                title=f'🔎 Multiple songs named "{query}"',
+                description="\n".join(lines),
+                colour=discord.Colour.orange(),
+            )
+            embed.add_field(
+                name="What to do",
+                value=(
+                    "Identify the song you want to remove from the list above, "
+                    "then use:\n"
+                    "**`/delete_song_id <id>`** — to start the deletion confirmation.\n\n"
+                    "⚠️ Reacting to this message will **not** delete any songs."
+                ),
+                inline=False,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
             return
 
         song = matches[0]
-        status = "✅ active" if song.get("available", 1) else "⛔ deactivated"
-        msg_content = (
-            f"🎵 **{song['name']}** by **{song['artist']}** "
-            f"(ID: `{song['id']}`, {status})\n\n"
-            f"React with {REACT_DEACTIVATE} to **deactivate** "
-            f"— removes from playlist but keeps the audio file "
-            f"(re-enable later with `/toggle_song`).\n"
-            f"React with {REACT_HARD_DELETE} to **permanently delete** "
-            f"— removes from the database **and** deletes the audio file.\n\n"
-            f"Only <@{interaction.user.id}> can confirm this action."
+        msg_content = await _build_delete_confirm_message(
+            song, interaction.user.id, interaction.client
         )
 
         # Must be non-ephemeral so we can attach reactions.

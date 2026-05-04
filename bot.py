@@ -48,6 +48,7 @@ from views import (
     REACT_DEACTIVATE,
     REACT_HARD_DELETE,
     MusicControlView,
+    _build_delete_confirm_message,
     _song_table_embed,
 )
 
@@ -350,6 +351,41 @@ async def cmd_toggle_song_id(interaction: discord.Interaction, song_id: int) -> 
             f"✅ **{song['name']}** by **{song['artist']}** has been re-activated.",
             ephemeral=True,
         )
+
+
+@bot.tree.command(
+    name="delete_song_id",
+    description="Begin the two-step delete confirmation for a song by its unique ID.",
+)
+@app_commands.describe(song_id="The unique song ID shown in the song list")
+async def cmd_delete_song_id(interaction: discord.Interaction, song_id: int) -> None:
+    song = get_song(song_id)
+    if not song:
+        await interaction.response.send_message(
+            f"Sorry, there is no song with ID {song_id}.", ephemeral=True
+        )
+        return
+
+    msg_content = await _build_delete_confirm_message(
+        song, interaction.user.id, interaction.client
+    )
+
+    # Non-ephemeral so reactions can be added.
+    await interaction.response.send_message(msg_content)
+    msg = await interaction.original_response()
+
+    await msg.add_reaction(REACT_DEACTIVATE)
+    await msg.add_reaction(REACT_HARD_DELETE)
+
+    bot.pending_deletes[msg.id] = {
+        "user_id": interaction.user.id,
+        "song": song,
+    }
+    log.info(
+        "Pending delete started for song %d by user %d (via /delete_song_id)",
+        song_id,
+        interaction.user.id,
+    )
 
 
 @bot.tree.command(
