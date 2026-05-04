@@ -25,10 +25,11 @@ import asyncio
 
 import discord
 
-from config import SONGS_DIR
+from config import MUSIC_MANAGER_ROLE_ID, SONGS_DIR
 from database import (
     add_song,
     get_all_songs,
+    get_all_songs_admin,
     get_songs_by_name,
 )
 
@@ -43,6 +44,31 @@ CONTROLLER_SEARCH_LIMIT = 30
 # Reaction emojis for the two-step delete confirmation.
 REACT_DEACTIVATE = "✅"
 REACT_HARD_DELETE = "🗑️"
+
+
+# ---------------------------------------------------------------------------
+# Permission helper
+# ---------------------------------------------------------------------------
+
+def is_music_manager(interaction: discord.Interaction) -> bool:
+    """Return True if the interacting user may manage the song library.
+
+    Access is granted when ANY of the following hold:
+    * ``MUSIC_MANAGER_ROLE_ID`` is 0 (unrestricted / default).
+    * The user has the Administrator permission in the guild.
+    * The user holds the role whose ID matches ``MUSIC_MANAGER_ROLE_ID``.
+
+    Always returns True in DM contexts when the role ID is 0.
+    """
+    if not MUSIC_MANAGER_ROLE_ID:
+        return True
+    member = interaction.user
+    if not isinstance(member, discord.Member):
+        # DM context — guild roles cannot be checked.
+        return False
+    if member.guild_permissions.administrator:
+        return True
+    return any(r.id == MUSIC_MANAGER_ROLE_ID for r in member.roles)
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +205,12 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not is_music_manager(interaction):
+            await interaction.response.send_message(
+                "❌ You need the **Music Manager** role to add songs.", ephemeral=True
+            )
+            return
+
         song_path = SONGS_DIR / self.filename.value
         if not song_path.exists():
             await interaction.response.send_message(
@@ -223,6 +255,12 @@ class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not is_music_manager(interaction):
+            await interaction.response.send_message(
+                "❌ You need the **Music Manager** role to delete songs.", ephemeral=True
+            )
+            return
+
         query = self.song_name.value
         matches = get_songs_by_name(query)
 
@@ -411,7 +449,7 @@ class MusicControlView(discord.ui.View):
     # ------------------------------------------------------------------
 
     @discord.ui.button(
-        label="📋 Song List",
+        label="📋 Playlist",
         style=discord.ButtonStyle.secondary,
         custom_id="music:song_list",
         row=1,
@@ -424,6 +462,19 @@ class MusicControlView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(
+        label="📚 Full Library",
+        style=discord.ButtonStyle.secondary,
+        custom_id="music:full_library",
+        row=1,
+    )
+    async def full_library(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        songs = get_all_songs_admin()
+        embed = _song_table_embed(songs, title="🎵 Song Library (All)")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(
         label="➕ Add Song",
         style=discord.ButtonStyle.success,
         custom_id="music:add_song",
@@ -432,6 +483,11 @@ class MusicControlView(discord.ui.View):
     async def add_song(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        if not is_music_manager(interaction):
+            await interaction.response.send_message(
+                "❌ You need the **Music Manager** role to add songs.", ephemeral=True
+            )
+            return
         await interaction.response.send_modal(AddSongModal())
 
     @discord.ui.button(
@@ -443,4 +499,9 @@ class MusicControlView(discord.ui.View):
     async def delete_song(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        if not is_music_manager(interaction):
+            await interaction.response.send_message(
+                "❌ You need the **Music Manager** role to delete songs.", ephemeral=True
+            )
+            return
         await interaction.response.send_modal(DeleteSongModal())

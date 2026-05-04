@@ -11,6 +11,20 @@ A **rigged** Discord music bot that shuffles a playlist of local audio files and
 | Persistent controller | A button panel posted in a Discord channel survives bot restarts. |
 | Song library | Songs are tracked in SQLite with id, name, artist, added\_by, filename, times\_played, and available flag. |
 | File management | Audio files are stored in `songs/` and managed via Discord commands. |
+| Role-gated management | Add, delete, toggle, upload, and rig commands are restricted to a configurable **Music Manager** role (see `MUSIC_MANAGER_ROLE_ID`). |
+
+## Permissions
+
+Set `MUSIC_MANAGER_ROLE_ID` in `.env` to the Discord role ID that should be allowed to manage the song library.  
+When set to `0` (the default) everyone can manage songs, which is useful for testing.
+
+| Action | Who can do it |
+|---|---|
+| Play, Pause, Skip, Leave | Everyone |
+| View playlist (active songs) | Everyone |
+| View full library (including deactivated) | Everyone |
+| Upload / Add / Delete / Toggle songs | Music Manager role (or server Administrator) |
+| Set rigged song | Music Manager role (or server Administrator) |
 
 ## Controller Buttons
 
@@ -23,26 +37,27 @@ A **rigged** Discord music bot that shuffles a playlist of local audio files and
 | 📞 Leave | Disconnect the bot from the voice channel. |
 
 **Row 2 – Library**
-| Button | Action |
-|---|---|
-| 📋 Song List | Show the active song table (id, name, artist, added by, plays). |
-| ➕ Add Song | Open a modal to register a file already in `songs/`. |
-| 🗑 Delete Song | Open a modal to start the two-step delete by song name. |
+| Button | Who | Action |
+|---|---|---|
+| 📋 Playlist | Everyone | Show only the currently active (available) songs. |
+| 📚 Full Library | Everyone | Show all songs including deactivated ones — useful for requesting a re-enable. |
+| ➕ Add Song | Music Manager | Open a modal to register a file already in `songs/`. |
+| 🗑 Delete Song | Music Manager | Open a modal to start the two-step delete by song name. |
 
 ## Slash Commands
 
-| Command | Description |
-|---|---|
-| `/controller` | Post (or re-post) the controller panel in the current channel. |
-| `/upload_song` | Upload an audio file attachment and add it to the library. |
-| `/search` | Search the library by name, artist, added\_by user ID, or song id. |
-| `/songs` | Display all active songs. |
-| `/songs_all` | Display all songs including deactivated ones (admin view). |
-| `/toggle_song` | Activate or deactivate a song by name. |
-| `/toggle_song_id` | Activate or deactivate a song by its unique id. |
-| `/delete_song_id` | Start the two-step delete confirmation for a specific song id. |
-| `/set_rigged song_id` | Set which song is secretly rigged (0 to disable). |
-| `/now_playing` | Show the song currently playing. |
+| Command | Who | Description |
+|---|---|---|
+| `/controller` | Everyone | Post (or re-post) the controller panel in the current channel. |
+| `/search` | Everyone | Search the library by name, artist, added\_by user ID, or song id. |
+| `/songs` | Everyone | Display active (available) songs only. |
+| `/songs_all` | Everyone | Display all songs including deactivated ones. |
+| `/now_playing` | Everyone | Show the song currently playing. |
+| `/upload_song` | Music Manager | Upload an audio file attachment and add it to the library. |
+| `/toggle_song` | Music Manager | Activate or deactivate a song by name. |
+| `/toggle_song_id` | Music Manager | Activate or deactivate a song by its unique id. |
+| `/delete_song_id` | Music Manager | Start the two-step delete confirmation for a specific song id. |
+| `/set_rigged song_id` | Music Manager | Set which song is secretly rigged (0 to disable). |
 
 ## Prerequisites
 
@@ -68,7 +83,8 @@ pip install -r requirements.txt
 
 # 4. Configure environment variables
 cp .env.example .env
-# Edit .env and fill in DISCORD_TOKEN, CONTROLLER_CHANNEL_ID, RIGGED_SONG_ID
+# Edit .env and fill in DISCORD_TOKEN, CONTROLLER_CHANNEL_ID, RIGGED_SONG_ID,
+# and optionally MUSIC_MANAGER_ROLE_ID (right-click a role → Copy Role ID)
 
 # 5. (Optional) Pre-populate the songs folder
 cp /path/to/my_song.mp3 songs/

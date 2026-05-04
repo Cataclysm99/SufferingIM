@@ -50,6 +50,7 @@ from views import (
     MusicControlView,
     _build_delete_confirm_message,
     _song_table_embed,
+    is_music_manager,
 )
 
 log = logging.getLogger(__name__)
@@ -83,9 +84,10 @@ def _controller_embed() -> discord.Embed:
             "⏭ **Skip** – Skip to the next song.\n"
             "📞 **Leave** – Disconnect the bot from the voice channel.\n\n"
             "**Row 2 – Library**\n"
-            "📋 **Song List** – View all active songs (id, name, artist, added by, plays).\n"
-            "➕ **Add Song** – Register an audio file already in `songs/`.\n"
-            "🗑 **Delete Song** – Begin the two-step delete process by song name.\n\n"
+            "📋 **Playlist** – View currently active (available) songs.\n"
+            "📚 **Full Library** – View all songs, including deactivated ones.\n"
+            "➕ **Add Song** – *(Music Manager only)* Register a file already in `songs/`.\n"
+            "🗑 **Delete Song** – *(Music Manager only)* Begin the two-step delete process.\n\n"
             "*Tip: upload new audio files with `/upload_song`.*\n"
             "*Use `/search` to find songs by name, artist, uploader, or id.*"
         ),
@@ -227,6 +229,12 @@ async def cmd_upload_song(
     name: str,
     artist: str,
 ) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role to upload songs.", ephemeral=True
+        )
+        return
+
     ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
     if ext not in ALLOWED_EXTENSIONS:
         await interaction.response.send_message(
@@ -294,6 +302,12 @@ async def cmd_search(
 )
 @app_commands.describe(name="Song name to toggle")
 async def cmd_toggle_song(interaction: discord.Interaction, name: str) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role to toggle songs.", ephemeral=True
+        )
+        return
+
     matches = get_songs_by_name(name)
     if not matches:
         await interaction.response.send_message(
@@ -332,6 +346,12 @@ async def cmd_toggle_song(interaction: discord.Interaction, name: str) -> None:
 )
 @app_commands.describe(song_id="The unique song ID")
 async def cmd_toggle_song_id(interaction: discord.Interaction, song_id: int) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role to toggle songs.", ephemeral=True
+        )
+        return
+
     song = get_song(song_id)
     if not song:
         await interaction.response.send_message(
@@ -359,6 +379,12 @@ async def cmd_toggle_song_id(interaction: discord.Interaction, song_id: int) -> 
 )
 @app_commands.describe(song_id="The unique song ID shown in the song list")
 async def cmd_delete_song_id(interaction: discord.Interaction, song_id: int) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role to delete songs.", ephemeral=True
+        )
+        return
+
     song = get_song(song_id)
     if not song:
         await interaction.response.send_message(
@@ -414,6 +440,13 @@ async def cmd_songs_all(interaction: discord.Interaction) -> None:
 )
 @app_commands.describe(song_id="Database id of the song to rig (0 = disable)")
 async def cmd_set_rigged(interaction: discord.Interaction, song_id: int) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role to change the rigged song.",
+            ephemeral=True,
+        )
+        return
+
     if song_id == 0:
         bot.player.set_rigged_song(0)
         await interaction.response.send_message(

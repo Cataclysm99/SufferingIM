@@ -24,6 +24,11 @@ def _int_env(key: str, default: int = 0) -> int:
 # Leave empty / 0 to skip auto-posting.
 CONTROLLER_CHANNEL_ID: int = _int_env("CONTROLLER_CHANNEL_ID", 0)
 
+# ── Permissions ───────────────────────────────────────────────────────────────
+# Discord role ID whose members may add, delete, and toggle songs.
+# Set to 0 (or omit) to allow everyone to manage the library (unrestricted mode).
+MUSIC_MANAGER_ROLE_ID: int = _int_env("MUSIC_MANAGER_ROLE_ID", 0)
+
 # ── Rigged song ───────────────────────────────────────────────────────────────
 # Database row-id of the song that is secretly inserted into the queue.
 # Set to 0 to disable the rigged feature entirely.
