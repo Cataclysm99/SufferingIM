@@ -8,12 +8,16 @@ Features
 * Two-step song deletion via emoji reactions (deactivate or hard-delete).
 * Slash commands for uploading songs, searching, toggling availability,
   changing the rigged song, and querying now-playing information.
+* Daily radio broadcast intermissions mixed silently between songs when
+  the voice channel has enough users (see BroadcastScheduler).
 
 Environment variables (see .env.example)
 -----------------------------------------
 DISCORD_TOKEN          – Bot token (required).
 CONTROLLER_CHANNEL_ID  – Channel id where the controller is auto-posted.
 RIGGED_SONG_ID         – Database id of the song to secretly inject (0 = off).
+BROADCAST_MIN_USERS    – Minimum non-bot VC members to trigger broadcasts (default 3).
+BROADCAST_INTERVAL     – Songs between automatic broadcast insertions (default 3).
 """
 from __future__ import annotations
 
@@ -26,10 +30,12 @@ from discord.ext import commands
 from config import (
     ALLOWED_EXTENSIONS,
     CONTROLLER_CHANNEL_ID,
+    RADIO_DIR,
     RIGGED_SONG_ID,
     SONGS_DIR,
     TOKEN,
 )
+from broadcast import DAYS as BROADCAST_DAYS, BroadcastScheduler
 from database import (
     activate_song,
     add_song,
@@ -118,6 +124,14 @@ class MusicBot(commands.Bot):
         log.info("Logged in as %s (id=%s)", self.user, self.user.id)  # type: ignore[union-attr]
         init_db()
         self.player.set_rigged_song(RIGGED_SONG_ID)
+
+        # Ensure radio directory tree exists and attach the broadcast scheduler.
+        RADIO_DIR.mkdir(parents=True, exist_ok=True)
+        for day in BROADCAST_DAYS:
+            (RADIO_DIR / day).mkdir(exist_ok=True)
+        self.player.set_broadcast(BroadcastScheduler(RADIO_DIR))
+        log.info("Broadcast scheduler ready (radio dir: %s)", RADIO_DIR)
+
         await self._ensure_controller()
 
     async def _ensure_controller(self) -> None:
@@ -482,6 +496,71 @@ async def cmd_now_playing(interaction: discord.Interaction) -> None:
     embed.add_field(name="Artist", value=song["artist"], inline=True)
     embed.add_field(name="Times Played", value=str(song["times_played"]), inline=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(
+    name="play_broadcast",
+    description="Immediately play the next radio broadcast clip for today (Music Manager only).",
+)
+async def cmd_play_broadcast(interaction: discord.Interaction) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role to trigger a broadcast.",
+            ephemeral=True,
+        )
+        return
+
+    if not bot.player.is_connected():
+        await interaction.response.send_message(
+            "❌ The bot is not connected to a voice channel. Press **▶ Play / Resume** first.",
+            ephemeral=True,
+        )
+        return
+
+    scheduler = bot.player.broadcast
+    if scheduler is None:
+        await interaction.response.send_message(
+            "❌ The broadcast scheduler is not initialised.", ephemeral=True
+        )
+        return
+
+    day = scheduler.today_name()
+    total = scheduler.total_clips(day)
+    remaining = scheduler.clips_remaining(day)
+
+    if remaining == 0:
+        if total == 0:
+            await interaction.response.send_message(
+                f"❌ No broadcast clips found for **{day}**.\n"
+                f"Add audio files to `radio/{day}/` named `01.mp3`, `02.mp3`, …",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                f"📻 All **{total}** broadcast clip(s) for **{day}** have already played this week.\n"
+                f"They will reset at the start of next week.",
+                ephemeral=True,
+            )
+        return
+
+    clip_number = scheduler.next_clip_number(day)
+    started = await bot.player.play_broadcast_now()
+    if started:
+        await interaction.response.send_message(
+            f"📻 Playing broadcast clip **{clip_number}** of **{total}** for **{day}**.",
+            ephemeral=True,
+        )
+        log.info(
+            "Manual broadcast triggered by user %d: clip %d/%d for %s",
+            interaction.user.id,
+            clip_number,
+            total,
+            day,
+        )
+    else:
+        await interaction.response.send_message(
+            "❌ Could not start the broadcast clip.", ephemeral=True
+        )
 
 
 # ---------------------------------------------------------------------------

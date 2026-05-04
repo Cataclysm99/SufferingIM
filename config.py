@@ -37,9 +37,20 @@ RIGGED_SONG_ID: int = _int_env("RIGGED_SONG_ID", 0)
 # Odds: 1-in-RIGGED_CHANCE probability of playing the rigged song next.
 RIGGED_CHANCE: int = 10
 
+# ── Broadcast intermissions ───────────────────────────────────────────────────
+# Minimum number of non-bot users in the voice channel before a broadcast
+# clip is eligible to play.  Set to 0 to always allow broadcasts.
+BROADCAST_MIN_USERS: int = _int_env("BROADCAST_MIN_USERS", 3)
+
+# Number of regular songs that must play between each broadcast insertion.
+# e.g. 3 = one broadcast clip plays after every 3 songs.
+BROADCAST_INTERVAL: int = _int_env("BROADCAST_INTERVAL", 3)
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR: Path = Path(__file__).parent
 SONGS_DIR: Path = BASE_DIR / "songs"
+# Radio broadcast clips live under radio/<weekday>/<nn>.mp3
+RADIO_DIR: Path = BASE_DIR / "radio"
 DB_PATH: str = str(BASE_DIR / "songs.db")
 
 # ── FFmpeg options ────────────────────────────────────────────────────────────

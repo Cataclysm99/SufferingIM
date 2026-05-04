@@ -384,6 +384,9 @@ class MusicControlView(discord.ui.View):
                 f"🎵 Now playing: **{song['name']}** by **{song['artist']}**",
                 ephemeral=True,
             )
+        elif player.is_playing():
+            # A broadcast clip started instead of a regular song.
+            await interaction.followup.send("▶ Playback started.", ephemeral=True)
         else:
             await interaction.followup.send(
                 "❌ The song library is empty. Add songs with **Add Song**.",

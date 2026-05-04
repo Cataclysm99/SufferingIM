@@ -12,6 +12,7 @@ A **rigged** Discord music bot that shuffles a playlist of local audio files and
 | Song library | Songs are tracked in SQLite with id, name, artist, added\_by, filename, times\_played, and available flag. |
 | File management | Audio files are stored in `songs/` and managed via Discord commands. |
 | Role-gated management | Add, delete, toggle, upload, and rig commands are restricted to a configurable **Music Manager** role (see `MUSIC_MANAGER_ROLE_ID`). |
+| Radio broadcasts | Pre-recorded intermission clips organised by weekday play silently between songs when enough users are in the call; Music Managers can also force-play the next clip at any time. |
 
 ## Permissions
 
@@ -25,6 +26,7 @@ When set to `0` (the default) everyone can manage songs, which is useful for tes
 | View full library (including deactivated) | Everyone |
 | Upload / Add / Delete / Toggle songs | Music Manager role (or server Administrator) |
 | Set rigged song | Music Manager role (or server Administrator) |
+| Force-play next broadcast clip | Music Manager role (or server Administrator) |
 
 ## Controller Buttons
 
@@ -58,6 +60,7 @@ When set to `0` (the default) everyone can manage songs, which is useful for tes
 | `/toggle_song_id` | Music Manager | Activate or deactivate a song by its unique id. |
 | `/delete_song_id` | Music Manager | Start the two-step delete confirmation for a specific song id. |
 | `/set_rigged song_id` | Music Manager | Set which song is secretly rigged (0 to disable). |
+| `/play_broadcast` | Music Manager | Immediately play the next broadcast clip for today, bypassing the normal interval and user-count check. |
 
 ## Prerequisites
 
@@ -149,17 +152,72 @@ The rigged song is stored in the library like any other song.  Set it with:
 Every time the bot picks the next song to play it rolls a 10-sided die.
 On a roll of 1 the rigged song plays instead of whatever was queued next — silently and without any indication to listeners.
 
+## Radio Broadcast Intermissions
+
+Pre-recorded radio clips are mixed silently into the song queue, playing one clip after every few songs when enough users are in the call.  Each day of the week has its own sequential storyline.
+
+### File layout
+
+```
+radio/
+├── monday/
+│   ├── 01.mp3
+│   ├── 02.mp3
+│   └── ...
+├── tuesday/
+│   ├── 01.mp3
+│   └── ...
+└── ... (wednesday through sunday)
+```
+
+* **Naming**: files must be named numerically — `01.mp3`, `02.mp3`, …, `10.mp3`, etc.  Zero-padded names are recommended so they sort correctly on all systems.
+* **Format**: any format supported by the bot (`.mp3`, `.wav`, `.ogg`, `.flac`, `.m4a`, `.aac`, `.opus`).
+* **Order**: clips play in ascending filename order.  The sequence is remembered across bot restarts (`radio_state.json`).
+
+### Playback rules
+
+| Rule | Detail |
+|---|---|
+| User threshold | A broadcast only plays automatically when there are at least **`BROADCAST_MIN_USERS`** non-bot members in the voice channel (default: 3). |
+| Interval | One clip is inserted after every **`BROADCAST_INTERVAL`** regular songs (default: 3).  The counter is per-session and resets after each clip. |
+| Weekly reset | At the start of each ISO week (Monday) the per-day index resets to clip 1, so the story starts fresh the following week regardless of how many clips were heard. |
+| No-pressure design | If the user threshold is never met (or there are no clips for the day), no broadcast plays — normal music continues uninterrupted. |
+
+### Configuration
+
+```env
+BROADCAST_MIN_USERS=3   # minimum non-bot users in VC (0 = always broadcast)
+BROADCAST_INTERVAL=3    # songs between each automatic broadcast insertion
+```
+
+### Manual override
+
+Music Managers can force the next clip to play immediately:
+```
+/play_broadcast
+```
+This ignores the interval counter and user-count check, stops the current song if one is playing, and plays the next clip in the sequence.
+
 ## File Structure
 
 ```
 SufferingIM/
 ├── bot.py          # Entry point
+├── broadcast.py    # BroadcastScheduler (daily radio clip sequencing)
 ├── config.py       # Environment / path configuration
 ├── database.py     # SQLite CRUD helpers
-├── player.py       # MusicPlayer (queue, rigged mechanic, FFmpeg)
+├── player.py       # MusicPlayer (queue, rigged mechanic, broadcast, FFmpeg)
 ├── views.py        # Persistent Discord UI (buttons + modals)
 ├── requirements.txt
 ├── .env.example
-└── songs/          # Audio files (not tracked in git)
-    └── .gitkeep
+├── songs/          # Audio files (not tracked in git)
+│   └── .gitkeep
+└── radio/          # Broadcast clips organised by weekday (not tracked in git)
+    ├── monday/     # e.g. 01.mp3  02.mp3  …
+    ├── tuesday/
+    ├── wednesday/
+    ├── thursday/
+    ├── friday/
+    ├── saturday/
+    └── sunday/
 ```
