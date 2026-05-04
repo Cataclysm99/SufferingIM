@@ -507,7 +507,7 @@ async def cmd_now_playing(interaction: discord.Interaction) -> None:
 )
 @app_commands.describe(
     day=(
-        "Day of the week to use (MON, TUE, WED, THR, FRI, SAT, SUN). "
+        "Day of the week to use (MON, TUE, WED, THR/THU, FRI, SAT, SUN). "
         "Defaults to today."
     ),
     clip="Specific clip number to play. Defaults to the next sequential clip.",
@@ -543,7 +543,8 @@ async def cmd_play_broadcast(
         "MON": "monday",
         "TUE": "tuesday",
         "WED": "wednesday",
-        "THR": "thursday",
+        "THR": "thursday",  # as specified in requirements
+        "THU": "thursday",  # standard three-letter abbreviation alias
         "FRI": "friday",
         "SAT": "saturday",
         "SUN": "sunday",
@@ -556,7 +557,7 @@ async def cmd_play_broadcast(
         if target_day is None:
             await interaction.response.send_message(
                 f"❌ `{day}` is not a valid day abbreviation.\n"
-                "Use one of: **MON TUE WED THR FRI SAT SUN**",
+                "Use one of: **MON TUE WED THR/THU FRI SAT SUN**",
                 ephemeral=True,
             )
             return
