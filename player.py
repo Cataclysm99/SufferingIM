@@ -71,7 +71,7 @@ class MusicPlayer:
         # Rigged roll
         if self._rigged_song_id and random.randint(1, RIGGED_CHANCE) == 1:
             rigged = get_song(self._rigged_song_id)
-            if rigged:
+            if rigged and rigged.get("available", 1):
                 return rigged
 
         # Normal queue pick
@@ -117,6 +117,12 @@ class MusicPlayer:
         if song is None:
             self.current_song = None
             return None
+
+        # Re-fetch to confirm the song is still available (it may have been
+        # deactivated after the queue was built but before playback started).
+        fresh = get_song(song["id"])
+        if not fresh or not fresh.get("available", 1):
+            return await self.play_next()
 
         song_path = SONGS_DIR / song["filename"]
         if not song_path.exists():

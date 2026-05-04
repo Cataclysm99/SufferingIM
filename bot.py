@@ -5,9 +5,9 @@ Features
 --------
 * Persistent controller view in a configurable channel.
 * Shuffled playback with a secret 1-in-10 rigged song.
-* Slash commands for uploading songs, changing the rigged song, and
-  querying now-playing information.
-* All playback controls available via the persistent button panel.
+* Two-step song deletion via emoji reactions (deactivate or hard-delete).
+* Slash commands for uploading songs, searching, toggling availability,
+  changing the rigged song, and querying now-playing information.
 
 Environment variables (see .env.example)
 -----------------------------------------
@@ -30,10 +30,26 @@ from config import (
     SONGS_DIR,
     TOKEN,
 )
-from database import add_song, get_song, init_db
+from database import (
+    activate_song,
+    add_song,
+    deactivate_song,
+    get_all_songs,
+    get_all_songs_admin,
+    get_song,
+    get_songs_by_name,
+    hard_delete_song,
+    init_db,
+    search_songs,
+)
 from player import MusicPlayer
-from views import MusicControlView, _song_table_embed, CONTROLLER_SEARCH_LIMIT
-from database import get_all_songs
+from views import (
+    CONTROLLER_SEARCH_LIMIT,
+    REACT_DEACTIVATE,
+    REACT_HARD_DELETE,
+    MusicControlView,
+    _song_table_embed,
+)
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
@@ -61,15 +77,16 @@ def _controller_embed() -> discord.Embed:
         description=(
             "Use the buttons below to control music playback.\n\n"
             "**Row 1 – Playback**\n"
-            "▶ **Join & Play** – Join your voice channel and start the shuffled playlist.\n"
+            "▶ **Play / Resume** – Join your voice channel and play, or resume if paused.\n"
             "⏸ **Pause** – Pause the current song.\n"
-            "▶ **Resume** – Resume a paused song.\n"
-            "⏭ **Skip** – Skip to the next song.\n\n"
+            "⏭ **Skip** – Skip to the next song.\n"
+            "📞 **Leave** – Disconnect the bot from the voice channel.\n\n"
             "**Row 2 – Library**\n"
-            "📋 **Song List** – View all songs (id, name, author, plays).\n"
+            "📋 **Song List** – View all active songs (id, name, artist, added by, plays).\n"
             "➕ **Add Song** – Register an audio file already in `songs/`.\n"
-            "🗑 **Delete Song** – Remove a song by id (also deletes the file).\n\n"
-            "*Tip: upload new audio files with `/upload_song`.*"
+            "🗑 **Delete Song** – Begin the two-step delete process by song name.\n\n"
+            "*Tip: upload new audio files with `/upload_song`.*\n"
+            "*Use `/search` to find songs by name, artist, uploader, or id.*"
         ),
         colour=discord.Colour.purple(),
     )
@@ -81,6 +98,8 @@ class MusicBot(commands.Bot):
     def __init__(self) -> None:
         super().__init__(command_prefix="!", intents=intents)
         self.player = MusicPlayer(self)
+        # Tracks pending two-step deletes: {message_id: {"user_id": int, "song": dict}}
+        self.pending_deletes: dict[int, dict] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle hooks
@@ -115,6 +134,65 @@ class MusicBot(commands.Bot):
         await channel.send(embed=_controller_embed(), view=MusicControlView())
         log.info("Controller posted in #%s", channel.name)
 
+    # ------------------------------------------------------------------
+    # Reaction-based delete confirmation
+    # ------------------------------------------------------------------
+
+    async def on_raw_reaction_add(
+        self, payload: discord.RawReactionActionEvent
+    ) -> None:
+        """Handle ✅ / 🗑️ reactions for the two-step song delete flow."""
+        # Ignore the bot's own reactions.
+        if self.user and payload.user_id == self.user.id:
+            return
+
+        pending = self.pending_deletes.get(payload.message_id)
+        if not pending:
+            return
+
+        # Only the user who triggered the delete can confirm it.
+        if payload.user_id != pending["user_id"]:
+            return
+
+        emoji = str(payload.emoji)
+        song = pending["song"]
+
+        channel = self.get_channel(payload.channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        msg = await channel.fetch_message(payload.message_id)
+
+        if emoji == REACT_DEACTIVATE:
+            deactivate_song(song["id"])
+            await msg.edit(
+                content=(
+                    f"⛔ **{song['name']}** by **{song['artist']}** has been deactivated "
+                    f"and will no longer play. The audio file has been kept.\n"
+                    f"Use `/toggle_song` or `/toggle_song_id` to re-enable it."
+                )
+            )
+            await msg.clear_reactions()
+            del self.pending_deletes[payload.message_id]
+            log.info("Song %d deactivated by user %d", song["id"], payload.user_id)
+
+        elif emoji == REACT_HARD_DELETE:
+            hard_delete_song(song["id"])
+            song_path = SONGS_DIR / song["filename"]
+            if song_path.exists():
+                song_path.unlink()
+            await msg.edit(
+                content=(
+                    f"🗑️ **{song['name']}** by **{song['artist']}** has been permanently "
+                    f"deleted and its audio file has been removed."
+                )
+            )
+            await msg.clear_reactions()
+            del self.pending_deletes[payload.message_id]
+            log.info(
+                "Song %d hard-deleted by user %d", song["id"], payload.user_id
+            )
+
 
 bot = MusicBot()
 
@@ -140,13 +218,13 @@ async def cmd_controller(interaction: discord.Interaction) -> None:
 @app_commands.describe(
     file="Audio file to upload (.mp3, .wav, .ogg, .flac, .m4a, .aac, .opus)",
     name="Display name for the song",
-    author="Artist / author name",
+    artist="Artist name",
 )
 async def cmd_upload_song(
     interaction: discord.Interaction,
     file: discord.Attachment,
     name: str,
-    author: str,
+    artist: str,
 ) -> None:
     ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
     if ext not in ALLOWED_EXTENSIONS:
@@ -162,12 +240,136 @@ async def cmd_upload_song(
     dest = SONGS_DIR / file.filename
     await file.save(dest)
 
-    song_id = add_song(name, author, file.filename)
+    added_by = str(interaction.user.id)
+    song_id = add_song(name, artist, file.filename, added_by)
     await interaction.followup.send(
-        f"✅ **{name}** by **{author}** uploaded and added to the library.\n"
+        f"✅ **{name}** by **{artist}** uploaded and added to the library.\n"
         f"Song ID: `{song_id}` · File: `songs/{file.filename}`",
         ephemeral=True,
     )
+
+
+@bot.tree.command(
+    name="search",
+    description="Search the song library by name, artist, uploader, or id.",
+)
+@app_commands.describe(
+    field="Field to search by",
+    query="Search term",
+)
+@app_commands.choices(field=[
+    app_commands.Choice(name="Name", value="name"),
+    app_commands.Choice(name="Artist", value="artist"),
+    app_commands.Choice(name="Added By (user ID)", value="added_by"),
+    app_commands.Choice(name="ID", value="id"),
+])
+async def cmd_search(
+    interaction: discord.Interaction,
+    field: app_commands.Choice[str],
+    query: str,
+) -> None:
+    results = search_songs(field.value, query)
+    if not results:
+        if field.value == "artist":
+            msg = f"Sorry, there is no artist named {query}."
+        elif field.value == "name":
+            msg = f"Sorry, there is no song named {query}."
+        elif field.value == "added_by":
+            msg = f"Sorry, there are no songs added by user {query}."
+        else:
+            msg = f"Sorry, there is no song with ID {query}."
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
+
+    embed = _song_table_embed(
+        results, title=f'🔎 Results: {field.name} = "{query}"'
+    )
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(
+    name="toggle_song",
+    description="Activate or deactivate a song by name (case-insensitive).",
+)
+@app_commands.describe(name="Song name to toggle")
+async def cmd_toggle_song(interaction: discord.Interaction, name: str) -> None:
+    matches = get_songs_by_name(name)
+    if not matches:
+        await interaction.response.send_message(
+            f"Sorry, there is no song named {name}.", ephemeral=True
+        )
+        return
+
+    if len(matches) > 1:
+        embed = _song_table_embed(matches, title="🔎 Multiple Matches")
+        await interaction.response.send_message(
+            f"Multiple songs named **{name}** were found. "
+            "Use `/toggle_song_id` with the specific song ID instead.",
+            embed=embed,
+            ephemeral=True,
+        )
+        return
+
+    song = matches[0]
+    if song.get("available", 1):
+        deactivate_song(song["id"])
+        await interaction.response.send_message(
+            f"⛔ **{song['name']}** by **{song['artist']}** has been deactivated.",
+            ephemeral=True,
+        )
+    else:
+        activate_song(song["id"])
+        await interaction.response.send_message(
+            f"✅ **{song['name']}** by **{song['artist']}** has been re-activated.",
+            ephemeral=True,
+        )
+
+
+@bot.tree.command(
+    name="toggle_song_id",
+    description="Activate or deactivate a song by its unique ID.",
+)
+@app_commands.describe(song_id="The unique song ID")
+async def cmd_toggle_song_id(interaction: discord.Interaction, song_id: int) -> None:
+    song = get_song(song_id)
+    if not song:
+        await interaction.response.send_message(
+            f"Sorry, there is no song with ID {song_id}.", ephemeral=True
+        )
+        return
+
+    if song.get("available", 1):
+        deactivate_song(song_id)
+        await interaction.response.send_message(
+            f"⛔ **{song['name']}** by **{song['artist']}** has been deactivated.",
+            ephemeral=True,
+        )
+    else:
+        activate_song(song_id)
+        await interaction.response.send_message(
+            f"✅ **{song['name']}** by **{song['artist']}** has been re-activated.",
+            ephemeral=True,
+        )
+
+
+@bot.tree.command(
+    name="songs",
+    description="Display the full active song library.",
+)
+async def cmd_songs(interaction: discord.Interaction) -> None:
+    songs = get_all_songs()
+    embed = _song_table_embed(songs)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(
+    name="songs_all",
+    description="Display all songs including deactivated ones (admin view).",
+)
+async def cmd_songs_all(interaction: discord.Interaction) -> None:
+    songs = get_all_songs_admin()
+    embed = _song_table_embed(songs, title="🎵 Song Library (All)")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(
@@ -192,7 +394,7 @@ async def cmd_set_rigged(interaction: discord.Interaction, song_id: int) -> None
 
     bot.player.set_rigged_song(song_id)
     await interaction.response.send_message(
-        f"🎭 Rigged song set to **{song['name']}** by **{song['author']}** (id `{song_id}`).",
+        f"🎭 Rigged song set to **{song['name']}** by **{song['artist']}** (id `{song_id}`).",
         ephemeral=True,
     )
 
@@ -208,15 +410,8 @@ async def cmd_now_playing(interaction: discord.Interaction) -> None:
 
     embed = discord.Embed(title="🎵 Now Playing", colour=discord.Colour.green())
     embed.add_field(name="Song", value=song["name"], inline=True)
-    embed.add_field(name="Author", value=song["author"], inline=True)
+    embed.add_field(name="Artist", value=song["artist"], inline=True)
     embed.add_field(name="Times Played", value=str(song["times_played"]), inline=True)
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@bot.tree.command(name="songs", description="Display the full song library table.")
-async def cmd_songs(interaction: discord.Interaction) -> None:
-    songs = get_all_songs()
-    embed = _song_table_embed(songs)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

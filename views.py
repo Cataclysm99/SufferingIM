@@ -5,48 +5,86 @@ MusicControlView
     Persistent button panel (timeout=None) that survives bot restarts.
     All button custom_ids are stable strings prefixed with "music:".
 
-    Row 0 – playback controls : Join & Play | Pause | Resume | Skip
+    Row 0 – playback controls : Play/Resume | Pause | Skip | Leave
     Row 1 – library controls  : Song List  | Add Song | Delete Song
 
 AddSongModal
     Modal form to register an audio file that already exists in songs/.
+    The uploader's Discord user ID is captured automatically.
 
 DeleteSongModal
-    Modal form to remove a song by its unique id.
+    Two-step delete by song name.
+    Step 1 – modal: user enters song name.
+    Step 2 – bot posts a non-ephemeral confirmation in the channel with
+             ✅ (deactivate, keep file) and 🗑️ (hard-delete + remove file)
+             reactions.  on_raw_reaction_add in bot.py handles the action.
 """
 from __future__ import annotations
 
 import discord
 
 from config import SONGS_DIR
-from database import add_song, delete_song, get_all_songs
+from database import (
+    add_song,
+    get_all_songs,
+    get_songs_by_name,
+)
 
 # Column widths used in the song-table display.
 _COL_ID = 5
-_COL_NAME = 30
-_COL_AUTHOR = 20
+_COL_NAME = 25
+_COL_ARTIST = 18
+_COL_ADDED_BY = 20
 # Number of history messages to scan when searching for an existing controller.
 CONTROLLER_SEARCH_LIMIT = 30
+
+# Reaction emojis for the two-step delete confirmation.
+REACT_DEACTIVATE = "✅"
+REACT_HARD_DELETE = "🗑️"
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _song_table_embed(songs: list[dict]) -> discord.Embed:
-    """Build a nicely formatted embed table for the song library."""
-    embed = discord.Embed(title="🎵 Song Library", colour=discord.Colour.blue())
+def _song_table_embed(songs: list[dict], title: str = "🎵 Song Library") -> discord.Embed:
+    """Build a nicely formatted embed table for the song library.
+
+    When the list contains any deactivated songs the row's name field is
+    prefixed with ``[inactive]`` so admins can see status at a glance.
+    """
+    embed = discord.Embed(title=title, colour=discord.Colour.blue())
 
     if not songs:
         embed.description = "*No songs in the library yet.*"
         return embed
 
-    header = f"{'ID':<{_COL_ID}} {'Name':<{_COL_NAME}} {'Author':<{_COL_AUTHOR}} {'Plays'}"
-    divider = "─" * (_COL_ID + _COL_NAME + _COL_AUTHOR + 10)
-    rows = [
-        f"{s['id']:<{_COL_ID}} {s['name'][:_COL_NAME - 2]:<{_COL_NAME}} {s['author'][:_COL_AUTHOR - 2]:<{_COL_AUTHOR}} {s['times_played']}"
-        for s in songs
-    ]
+    show_inactive_marker = any(not s.get("available", 1) for s in songs)
+
+    header = (
+        f"{'ID':<{_COL_ID}} "
+        f"{'Name':<{_COL_NAME}} "
+        f"{'Artist':<{_COL_ARTIST}} "
+        f"{'Added By':<{_COL_ADDED_BY}} "
+        f"Plays"
+    )
+    divider = "─" * (_COL_ID + _COL_NAME + _COL_ARTIST + _COL_ADDED_BY + 16)
+
+    rows = []
+    for s in songs:
+        name_str = s["name"]
+        if show_inactive_marker and not s.get("available", 1):
+            name_str = f"[inactive] {name_str}"
+        name_str = name_str[: _COL_NAME - 1]
+
+        rows.append(
+            f"{s['id']:<{_COL_ID}} "
+            f"{name_str:<{_COL_NAME}} "
+            f"{s['artist'][:_COL_ARTIST - 1]:<{_COL_ARTIST}} "
+            f"{str(s.get('added_by', ''))[:_COL_ADDED_BY - 1]:<{_COL_ADDED_BY}} "
+            f"{s['times_played']}"
+        )
+
     embed.description = "```\n" + "\n".join([header, divider, *rows]) + "\n```"
     embed.set_footer(text=f"{len(songs)} song(s) total")
     return embed
@@ -64,8 +102,8 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
         placeholder="e.g. Bohemian Rhapsody",
         max_length=100,
     )
-    author = discord.ui.TextInput(
-        label="Author / Artist",
+    artist = discord.ui.TextInput(
+        label="Artist",
         placeholder="e.g. Queen",
         max_length=100,
     )
@@ -85,50 +123,87 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
             )
             return
 
+        added_by = str(interaction.user.id)
         song_id = add_song(
-            self.song_name.value, self.author.value, self.filename.value
+            self.song_name.value,
+            self.artist.value,
+            self.filename.value,
+            added_by,
         )
         await interaction.response.send_message(
-            f"✅ **{self.song_name.value}** by **{self.author.value}** added to the library.\n"
+            f"✅ **{self.song_name.value}** by **{self.artist.value}** added to the library.\n"
             f"Song ID: `{song_id}`",
             ephemeral=True,
         )
 
 
 class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
-    """Remove a song from the library by its id."""
+    """
+    Two-step delete by song name.
 
-    song_id = discord.ui.TextInput(
-        label="Song ID",
-        placeholder="Enter the numeric song ID",
-        max_length=10,
+    After the user submits the song name the bot:
+      1. Looks up the song (case-insensitive, all availability states).
+      2. Posts a *non-ephemeral* confirmation message in the channel.
+      3. Adds ✅ and 🗑️ reactions so the user can choose the delete type.
+      4. Stores the pending action in ``interaction.client.pending_deletes``.
+
+    The reaction handler (``on_raw_reaction_add`` in bot.py) completes
+    the action when the requesting user reacts.
+    """
+
+    song_name = discord.ui.TextInput(
+        label="Song Name",
+        placeholder="e.g. Bohemian Rhapsody",
+        max_length=100,
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        raw = self.song_id.value.strip()
-        if not raw.isdigit():
+        query = self.song_name.value
+        matches = get_songs_by_name(query)
+
+        if not matches:
             await interaction.response.send_message(
-                "❌ Song ID must be a positive integer.", ephemeral=True
+                f"Sorry, there is no song named **{query}**.",
+                ephemeral=True,
             )
             return
 
-        sid = int(raw)
-        song = delete_song(sid)
-        if song is None:
+        if len(matches) > 1:
+            embed = _song_table_embed(matches, title="🔎 Multiple Matches Found")
             await interaction.response.send_message(
-                f"❌ No song found with ID `{sid}`.", ephemeral=True
+                f"Multiple songs named **{query}** were found. "
+                "Use `/search` to identify the exact song, then ask an admin "
+                "to use `/toggle_song_id` or `/songs_all` to manage it.",
+                embed=embed,
+                ephemeral=True,
             )
             return
 
-        # Remove the audio file from disk.
-        song_path = SONGS_DIR / song["filename"]
-        if song_path.exists():
-            song_path.unlink()
-
-        await interaction.response.send_message(
-            f"🗑️ **{song['name']}** (ID {sid}) has been deleted from the library.",
-            ephemeral=True,
+        song = matches[0]
+        status = "✅ active" if song.get("available", 1) else "⛔ deactivated"
+        msg_content = (
+            f"🎵 **{song['name']}** by **{song['artist']}** "
+            f"(ID: `{song['id']}`, {status})\n\n"
+            f"React with {REACT_DEACTIVATE} to **deactivate** "
+            f"— removes from playlist but keeps the audio file "
+            f"(re-enable later with `/toggle_song`).\n"
+            f"React with {REACT_HARD_DELETE} to **permanently delete** "
+            f"— removes from the database **and** deletes the audio file.\n\n"
+            f"Only <@{interaction.user.id}> can confirm this action."
         )
+
+        # Must be non-ephemeral so we can attach reactions.
+        await interaction.response.send_message(msg_content)
+        msg = await interaction.original_response()
+
+        await msg.add_reaction(REACT_DEACTIVATE)
+        await msg.add_reaction(REACT_HARD_DELETE)
+
+        # Register the pending delete keyed on the confirmation message id.
+        interaction.client.pending_deletes[msg.id] = {  # type: ignore[attr-defined]
+            "user_id": interaction.user.id,
+            "song": song,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -153,16 +228,30 @@ class MusicControlView(discord.ui.View):
     # ------------------------------------------------------------------
 
     @discord.ui.button(
-        label="▶ Join & Play",
+        label="▶ Play / Resume",
         style=discord.ButtonStyle.success,
-        custom_id="music:join_play",
+        custom_id="music:play_resume",
         row=0,
     )
-    async def join_play(
+    async def play_resume(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         player = interaction.client.player  # type: ignore[attr-defined]
 
+        # If paused, just resume — no voice channel join needed.
+        if player.is_paused():
+            player.resume()
+            await interaction.response.send_message("▶ Resumed.", ephemeral=True)
+            return
+
+        # Already playing — nothing to do.
+        if player.is_playing():
+            await interaction.response.send_message(
+                "▶ Music is already playing.", ephemeral=True
+            )
+            return
+
+        # Not active — need to join a voice channel.
         if not interaction.user.voice:  # type: ignore[union-attr]
             await interaction.response.send_message(
                 "❌ You must be in a voice channel first!", ephemeral=True
@@ -171,19 +260,12 @@ class MusicControlView(discord.ui.View):
 
         voice_channel = interaction.user.voice.channel  # type: ignore[union-attr]
         await player.connect(voice_channel)
-
-        if player.is_active():
-            await interaction.response.send_message(
-                "✅ Joined the voice channel. Music is already playing.", ephemeral=True
-            )
-            return
-
         await interaction.response.defer(ephemeral=True)
         song = await player.play_next()
 
         if song:
             await interaction.followup.send(
-                f"🎵 Now playing: **{song['name']}** by **{song['author']}**",
+                f"🎵 Now playing: **{song['name']}** by **{song['artist']}**",
                 ephemeral=True,
             )
         else:
@@ -210,23 +292,6 @@ class MusicControlView(discord.ui.View):
             )
 
     @discord.ui.button(
-        label="▶ Resume",
-        style=discord.ButtonStyle.primary,
-        custom_id="music:resume",
-        row=0,
-    )
-    async def resume(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
-        player = interaction.client.player  # type: ignore[attr-defined]
-        if player.resume():
-            await interaction.response.send_message("▶ Resumed.", ephemeral=True)
-        else:
-            await interaction.response.send_message(
-                "❌ Nothing is paused right now.", ephemeral=True
-            )
-
-    @discord.ui.button(
         label="⏭ Skip",
         style=discord.ButtonStyle.secondary,
         custom_id="music:skip",
@@ -242,6 +307,26 @@ class MusicControlView(discord.ui.View):
             await interaction.response.send_message(
                 "❌ Nothing to skip.", ephemeral=True
             )
+
+    @discord.ui.button(
+        label="📞 Leave",
+        style=discord.ButtonStyle.danger,
+        custom_id="music:leave",
+        row=0,
+    )
+    async def leave(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        player = interaction.client.player  # type: ignore[attr-defined]
+        if not player.is_connected():
+            await interaction.response.send_message(
+                "❌ Not currently in a voice channel.", ephemeral=True
+            )
+            return
+        await player.disconnect()
+        await interaction.response.send_message(
+            "📞 Left the voice channel.", ephemeral=True
+        )
 
     # ------------------------------------------------------------------
     # Row 1 – library management
