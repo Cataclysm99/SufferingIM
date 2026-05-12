@@ -166,7 +166,7 @@ class MusicBot(commands.Bot):
             await self.user.edit(**kwargs)
             self._branding_mode = target
             log.info("Branding switched to %s mode.", target)
-        except discord.HTTPException as exc:
+        except Exception as exc:
             log.warning("Could not apply %s branding: %s", target, exc)
 
     async def submit_current_song_feedback(
@@ -479,4 +479,3 @@ if __name__ == "__main__":
     if not TOKEN:
         raise RuntimeError("DISCORD_TOKEN is not set. Copy .env.example to .env and fill it in.")
     bot.run(TOKEN)
-
