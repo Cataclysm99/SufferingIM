@@ -228,6 +228,8 @@ class MusicPlayer:
             s["id"]: (int(s.get("times_played", 0)) + int(s.get("likes", 0)) - int(s.get("dislikes", 0)))
             for s in normal_songs
         }
+        # Higher score means "played/liked more" and therefore should be selected less.
+        # Dislikes reduce score, so they increase eventual weight/chance.
         max_count = max(counts.values()) if counts else 0
         weights = [max_count - counts[s["id"]] + 1 for s in normal_songs]
         return random.choices(normal_songs, weights=weights, k=1)[0]
@@ -317,4 +319,3 @@ class MusicPlayer:
 
     def is_active(self) -> bool:
         return self.is_playing() or self.is_paused()
-

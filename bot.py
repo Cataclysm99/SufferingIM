@@ -142,7 +142,8 @@ class MusicBot(commands.Bot):
     async def _apply_branding_for_day(self) -> None:
         if self.user is None:
             return
-        weekday = datetime.datetime.now(datetime.UTC).weekday()  # Monday=0, Sunday=6
+        # Monday=0, Sunday=6; Sunday triggers heaven mode.
+        weekday = datetime.datetime.now(datetime.UTC).weekday()
         target = "heaven" if weekday == 6 else "suffering"
         if target == self._branding_mode:
             return
