@@ -96,15 +96,17 @@ On every transition to next track:
 ### Song selection model
 - No persistent queue
 - If rigged check hits (`1 / RIGGED_CHANCE`), choose randomly from `RIGGED_SONG_IDS`
-- Otherwise weighted normal selection:
-  - score = `times_played + likes - dislikes`
-  - weight = `max(score_set) - score + 1`
-  - higher dislikes increase chance; higher likes decrease chance
+- Otherwise, songs with a negative `vote_score` are excluded (suppressed)
+- Songs with a positive `vote_score` (net-disliked) receive the maximum weight
+- Remaining songs: weight = `max_played - times_played + 1` (less played → higher chance)
+- When a song plays its `vote_score` resets to 0
 
 ### Feedback model
-- `/like`, `/dislike` and controller buttons are available
-- One vote per user per hour globally
-- Feedback updates song weight inputs (`likes`, `dislikes`)
+- 👍 **Like** a song: `vote_score -= 1` — if score goes negative the song is suppressed and won't play until the next DJ cycle reset
+- 👎 **Dislike** a song: `vote_score += 1` — if score goes positive the song gets maximum selection probability
+- Cooldown: **one vote per user per song per hour** — a user may vote on many different songs in the same hour, but cannot vote on the same song twice within the hour
+- Votes are cast via `/like` / `/dislike` commands or the 👍/👎 controller buttons
+- Cycle reset (DJ outro → restart) resets all negative `vote_score` values back to 0
 
 ### Branding model
 - Sunday: switch toward HeavenFM config values/assets
@@ -114,9 +116,9 @@ On every transition to next track:
 ### Database model
 - Since deployment starts from fresh DB, migration logic was removed
 - `init_db()` now creates required tables directly:
-  - `songs` (includes likes/dislikes)
+  - `songs` (includes `vote_score` field)
   - `ads`
-  - `vote_cooldowns`
+  - `vote_cooldowns` (composite PK: user_id + song_id)
 
 ---
 

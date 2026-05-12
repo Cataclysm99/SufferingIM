@@ -208,7 +208,8 @@ def apply_song_feedback(song_id: int, user_id: int, is_like: bool) -> tuple[bool
                 (uid, song_id, now),
             )
 
-        # Like = -1 (decreases score toward disabled), Dislike = +1 (bumps weight)
+        # like  → vote_score -= 1 (negative score suppresses song until cycle reset)
+        # dislike → vote_score += 1 (positive score gives max selection probability)
         delta = -1 if is_like else 1
         conn.execute(
             "UPDATE songs SET vote_score = vote_score + ? WHERE id = ?",
