@@ -223,7 +223,8 @@ class MusicPlayer:
         if rigged_pool and random.randint(1, RIGGED_CHANCE) == 1:
             return random.choice(rigged_pool)
 
-        # Exclude songs with a negative vote_score (net-liked → disabled until cycle reset).
+        # Exclude songs whose vote_score went negative (received more likes than dislikes).
+        # In SufferingFM semantics, popular (liked) songs are suppressed; disliked songs are boosted.
         selectable = [s for s in normal_songs if int(s.get("vote_score", 0)) >= 0]
 
         if not selectable:
@@ -232,8 +233,8 @@ class MusicPlayer:
             return None
 
         # Weight calculation:
-        #   vote_score > 0 (net-disliked) → max possible weight (highest chance)
-        #   vote_score == 0               → inverse of times_played
+        #   vote_score > 0 (received more dislikes than likes) → max possible weight (highest chance)
+        #   vote_score == 0                                    → inverse of times_played
         max_played = max(int(s.get("times_played", 0)) for s in selectable)
         max_weight = max_played + 1  # weight a never-played song would receive
 

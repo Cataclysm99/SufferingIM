@@ -183,9 +183,9 @@ class MusicBot(commands.Bot):
         if fresh:
             self.player.current_song = fresh
         if is_like:
-            effect = "It will be suppressed until the next cycle reset."
+            effect = "Vote score decreased — if it goes negative the song is suppressed until the next cycle reset."
         else:
-            effect = "It will be bumped to max probability."
+            effect = "Vote score increased — if it is positive the song gets maximum selection probability."
         return True, f"{'👍' if is_like else '👎'} **{song['name']}** by **{song['artist']}**. {effect}"
 
     async def on_raw_reaction_add(

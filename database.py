@@ -182,8 +182,8 @@ def get_songs_by_ids(song_ids: list[int]) -> list[dict]:
 def apply_song_feedback(song_id: int, user_id: int, is_like: bool) -> tuple[bool, str]:
     """Apply like/dislike per-song-per-user with a one-hour cooldown.
 
-    like  → vote_score -= 1  (song becomes more likely to be skipped/disabled)
-    dislike → vote_score += 1  (song gets a probability bump)
+    like    → vote_score -= 1  (once negative, song is excluded from selection until cycle reset)
+    dislike → vote_score += 1  (once positive, song receives the maximum selection weight)
     A user may vote on multiple songs per hour, but not the same song twice in an hour.
     """
     now = time.time()
