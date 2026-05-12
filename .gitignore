@@ -222,4 +222,10 @@ __marimo__/
 songs.db
 songs/*
 !songs/.gitkeep
+ads/*
+!ads/.gitkeep
+dj_events/*
+!dj_events/.gitkeep
+!dj_events/*/
+!dj_events/*/.gitkeep
 __pycache__/

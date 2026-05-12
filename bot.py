@@ -1,44 +1,36 @@
 """
-bot.py – Entry point for the Suffering Music Bot.
-
-Features
---------
-* Persistent controller view in a configurable channel.
-* Shuffled playback with a secret 1-in-10 rigged song.
-* Two-step song deletion via emoji reactions (deactivate or hard-delete).
-* Slash commands for uploading songs, searching, toggling availability,
-  changing the rigged song, and querying now-playing information.
-* Daily radio broadcast intermissions mixed silently between songs when
-  the voice channel has enough users (see BroadcastScheduler).
-
-Environment variables (see .env.example)
------------------------------------------
-DISCORD_TOKEN          – Bot token (required).
-CONTROLLER_CHANNEL_ID  – Channel id where the controller is auto-posted.
-RIGGED_SONG_ID         – Database id of the song to secretly inject (0 = off).
-BROADCAST_MIN_USERS    – Minimum non-bot VC members to trigger broadcasts (default 3).
-BROADCAST_INTERVAL     – Songs between automatic broadcast insertions (default 3).
+bot.py – Entry point for the SufferingFM bot.
 """
 from __future__ import annotations
 
+import asyncio
+import datetime
 import logging
+from pathlib import Path
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from broadcast import DAYS as DJ_DAYS, DJEventScheduler
 from config import (
     ALLOWED_EXTENSIONS,
     CONTROLLER_CHANNEL_ID,
-    RADIO_DIR,
-    RIGGED_SONG_ID,
+    DJ_EVENTS_DIR,
+    HEAVEN_AVATAR_PATH,
+    HEAVEN_BANNER_PATH,
+    HEAVEN_BOT_NAME,
+    RIGGED_SONG_IDS,
     SONGS_DIR,
+    SUFFERING_AVATAR_PATH,
+    SUFFERING_BANNER_PATH,
+    SUFFERING_BOT_NAME,
     TOKEN,
 )
-from broadcast import DAYS as BROADCAST_DAYS, BroadcastScheduler
 from database import (
     activate_song,
     add_song,
+    apply_song_feedback,
     deactivate_song,
     get_all_songs,
     get_all_songs_admin,
@@ -47,6 +39,7 @@ from database import (
     hard_delete_song,
     init_db,
     search_songs,
+    sync_ads_from_disk,
 )
 from player import MusicPlayer
 from views import (
@@ -65,14 +58,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 
-# ---------------------------------------------------------------------------
-# Ensure the songs directory exists at startup.
-# ---------------------------------------------------------------------------
 SONGS_DIR.mkdir(parents=True, exist_ok=True)
-
-# ---------------------------------------------------------------------------
-# Bot definition
-# ---------------------------------------------------------------------------
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -81,118 +67,152 @@ intents.voice_states = True
 
 def _controller_embed() -> discord.Embed:
     embed = discord.Embed(
-        title="🎵 Music Bot Controller",
+        title="🎵 SufferingFM Controller",
         description=(
-            "Use the buttons below to control music playback.\n\n"
-            "**Row 1 – Playback**\n"
-            "▶ **Play / Resume** – Join your voice channel and play, or resume if paused.\n"
-            "⏸ **Pause** – Pause the current song.\n"
-            "⏭ **Skip** – Skip to the next song.\n"
-            "📞 **Leave** – Disconnect the bot from the voice channel.\n\n"
-            "**Row 2 – Library**\n"
-            "📋 **Playlist** – View currently active (available) songs.\n"
-            "📚 **Full Library** – View all songs, including deactivated ones.\n"
-            "➕ **Add Song** – *(Music Manager only)* Register a file already in `songs/`.\n"
-            "🗑 **Delete Song** – *(Music Manager only)* Begin the two-step delete process.\n\n"
-            "*Tip: upload new audio files with `/upload_song`.*\n"
-            "*Use `/search` to find songs by name, artist, uploader, or id.*"
+            "Use buttons below to control playback.\n\n"
+            "**Row 1 – Playback**: Play/Resume · Pause · Skip · Leave\n"
+            "**Row 2 – Library**: Playlist · Full Library · Add Song · Delete Song\n"
+            "**Row 3 – Feedback**: Like Current · Dislike Current\n\n"
+            "Intermissions: ads (~30 min) and DJ events (~60 min).\n"
+            "DJ cycle: intro at start, hourly random events, outro around 6h, then restart."
         ),
         colour=discord.Colour.purple(),
     )
-    embed.set_footer(text="Shuffle mode active · 1-in-10 secret song")
     return embed
+
+
+def _read_optional_bytes(path: str) -> bytes | None:
+    if not path:
+        return None
+    p = Path(path)
+    if not p.is_file():
+        return None
+    return p.read_bytes()
 
 
 class MusicBot(commands.Bot):
     def __init__(self) -> None:
         super().__init__(command_prefix="!", intents=intents)
         self.player = MusicPlayer(self)
-        # Tracks pending two-step deletes: {message_id: {"user_id": int, "song": dict}}
         self.pending_deletes: dict[int, dict] = {}
-
-    # ------------------------------------------------------------------
-    # Lifecycle hooks
-    # ------------------------------------------------------------------
+        self._branding_mode: str | None = None
+        self._branding_task: asyncio.Task | None = None
 
     async def setup_hook(self) -> None:
-        # Re-register the persistent view BEFORE the bot connects so
-        # interactions received while starting up are handled correctly.
         self.add_view(MusicControlView())
         await self.tree.sync()
 
     async def on_ready(self) -> None:
         log.info("Logged in as %s (id=%s)", self.user, self.user.id)  # type: ignore[union-attr]
         init_db()
-        self.player.set_rigged_song(RIGGED_SONG_ID)
+        sync_ads_from_disk()
+        self.player.set_rigged_songs(list(RIGGED_SONG_IDS))
 
-        # Ensure radio directory tree exists and attach the broadcast scheduler.
-        RADIO_DIR.mkdir(parents=True, exist_ok=True)
-        for day in BROADCAST_DAYS:
-            (RADIO_DIR / day).mkdir(exist_ok=True)
-        self.player.set_broadcast(BroadcastScheduler(RADIO_DIR))
-        log.info("Broadcast scheduler ready (radio dir: %s)", RADIO_DIR)
+        DJ_EVENTS_DIR.mkdir(parents=True, exist_ok=True)
+        for day in DJ_DAYS:
+            (DJ_EVENTS_DIR / day).mkdir(parents=True, exist_ok=True)
+        self.player.set_dj_events(DJEventScheduler(DJ_EVENTS_DIR))
+
+        await self._apply_branding_for_day()
+        if self._branding_task is None or self._branding_task.done():
+            self._branding_task = asyncio.create_task(self._branding_loop())
 
         await self._ensure_controller()
 
     async def _ensure_controller(self) -> None:
-        """Post the controller message if it is not already present."""
         if not CONTROLLER_CHANNEL_ID:
             return
         channel = self.get_channel(CONTROLLER_CHANNEL_ID)
         if not isinstance(channel, discord.TextChannel):
             return
-
-        # Check whether we already posted a controller message.
         async for msg in channel.history(limit=CONTROLLER_SEARCH_LIMIT):
             if msg.author == self.user and msg.components:
-                # Existing controller found – leave it in place.
                 return
-
         await channel.send(embed=_controller_embed(), view=MusicControlView())
         log.info("Controller posted in #%s", channel.name)
 
-    # ------------------------------------------------------------------
-    # Reaction-based delete confirmation
-    # ------------------------------------------------------------------
+    async def _branding_loop(self) -> None:
+        while True:
+            try:
+                await self._apply_branding_for_day()
+            except Exception as exc:
+                log.warning("Branding check failed: %s", exc)
+            await asyncio.sleep(300)
+
+    async def _apply_branding_for_day(self) -> None:
+        if self.user is None:
+            return
+        weekday = datetime.datetime.now(datetime.UTC).weekday()  # Monday=0, Sunday=6
+        target = "heaven" if weekday == 6 else "suffering"
+        if target == self._branding_mode:
+            return
+
+        if target == "heaven":
+            username = HEAVEN_BOT_NAME
+            avatar = _read_optional_bytes(HEAVEN_AVATAR_PATH)
+            banner = _read_optional_bytes(HEAVEN_BANNER_PATH)
+        else:
+            username = SUFFERING_BOT_NAME
+            avatar = _read_optional_bytes(SUFFERING_AVATAR_PATH)
+            banner = _read_optional_bytes(SUFFERING_BANNER_PATH)
+
+        kwargs: dict = {"username": username}
+        if avatar is not None:
+            kwargs["avatar"] = avatar
+        if banner is not None:
+            kwargs["banner"] = banner
+
+        try:
+            await self.user.edit(**kwargs)
+            self._branding_mode = target
+            log.info("Branding switched to %s mode.", target)
+        except discord.HTTPException as exc:
+            log.warning("Could not apply %s branding: %s", target, exc)
+
+    async def submit_current_song_feedback(
+        self, interaction: discord.Interaction, is_like: bool
+    ) -> tuple[bool, str]:
+        song = self.player.current_song
+        if not song:
+            return False, "Nothing is currently playing."
+        ok, msg = apply_song_feedback(song["id"], interaction.user.id, is_like)
+        if not ok:
+            return False, msg
+        fresh = get_song(song["id"])
+        if fresh:
+            self.player.current_song = fresh
+        action = "liked" if is_like else "disliked"
+        return True, f"You {action} **{song['name']}** by **{song['artist']}**."
 
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
     ) -> None:
-        """Handle ✅ / 🗑️ reactions for the two-step song delete flow."""
-        # Ignore the bot's own reactions.
         if self.user and payload.user_id == self.user.id:
             return
 
         pending = self.pending_deletes.get(payload.message_id)
         if not pending:
             return
-
-        # Only the user who triggered the delete can confirm it.
         if payload.user_id != pending["user_id"]:
             return
 
         emoji = str(payload.emoji)
         song = pending["song"]
-
         channel = self.get_channel(payload.channel_id)
         if not isinstance(channel, discord.TextChannel):
             return
-
         msg = await channel.fetch_message(payload.message_id)
 
         if emoji == REACT_DEACTIVATE:
             deactivate_song(song["id"])
             await msg.edit(
                 content=(
-                    f"⛔ **{song['name']}** by **{song['artist']}** has been deactivated "
-                    f"and will no longer play. The audio file has been kept.\n"
-                    f"Use `/toggle_song` or `/toggle_song_id` to re-enable it."
+                    f"⛔ **{song['name']}** by **{song['artist']}** has been deactivated.\n"
+                    "Use `/toggle_song` or `/toggle_song_id` to re-enable it."
                 )
             )
             await msg.clear_reactions()
             del self.pending_deletes[payload.message_id]
-            log.info("Song %d deactivated by user %d", song["id"], payload.user_id)
-
         elif emoji == REACT_HARD_DELETE:
             hard_delete_song(song["id"])
             song_path = SONGS_DIR / song["filename"]
@@ -200,41 +220,25 @@ class MusicBot(commands.Bot):
                 song_path.unlink()
             await msg.edit(
                 content=(
-                    f"🗑️ **{song['name']}** by **{song['artist']}** has been permanently "
-                    f"deleted and its audio file has been removed."
+                    f"🗑️ **{song['name']}** by **{song['artist']}** has been permanently deleted."
                 )
             )
             await msg.clear_reactions()
             del self.pending_deletes[payload.message_id]
-            log.info(
-                "Song %d hard-deleted by user %d", song["id"], payload.user_id
-            )
 
 
 bot = MusicBot()
 
 
-# ---------------------------------------------------------------------------
-# Slash commands
-# ---------------------------------------------------------------------------
-
-@bot.tree.command(
-    name="controller",
-    description="Post (or re-post) the music controller panel in this channel.",
-)
+@bot.tree.command(name="controller", description="Post the controller panel.")
 async def cmd_controller(interaction: discord.Interaction) -> None:
-    await interaction.response.send_message(
-        embed=_controller_embed(), view=MusicControlView()
-    )
+    await interaction.response.send_message(embed=_controller_embed(), view=MusicControlView())
 
 
-@bot.tree.command(
-    name="upload_song",
-    description="Upload an audio file and add it to the music library.",
-)
+@bot.tree.command(name="upload_song", description="Upload an audio file and add it to the library.")
 @app_commands.describe(
-    file="Audio file to upload (.mp3, .wav, .ogg, .flac, .m4a, .aac, .opus)",
-    name="Display name for the song",
+    file="Audio file to upload",
+    name="Display name",
     artist="Artist name",
 )
 async def cmd_upload_song(
@@ -252,34 +256,23 @@ async def cmd_upload_song(
     ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
     if ext not in ALLOWED_EXTENSIONS:
         await interaction.response.send_message(
-            f"❌ Unsupported file type `{ext}`.\n"
-            f"Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+            f"❌ Unsupported file type `{ext}`.\nAllowed: {', '.join(ALLOWED_EXTENSIONS)}",
             ephemeral=True,
         )
         return
 
     await interaction.response.defer(ephemeral=True)
-
     dest = SONGS_DIR / file.filename
     await file.save(dest)
-
-    added_by = str(interaction.user.id)
-    song_id = add_song(name, artist, file.filename, added_by)
+    song_id = add_song(name, artist, file.filename, str(interaction.user.id))
     await interaction.followup.send(
-        f"✅ **{name}** by **{artist}** uploaded and added to the library.\n"
-        f"Song ID: `{song_id}` · File: `songs/{file.filename}`",
+        f"✅ Added **{name}** by **{artist}**.\nSong ID: `{song_id}`",
         ephemeral=True,
     )
 
 
-@bot.tree.command(
-    name="search",
-    description="Search the song library by name, artist, uploader, or id.",
-)
-@app_commands.describe(
-    field="Field to search by",
-    query="Search term",
-)
+@bot.tree.command(name="search", description="Search songs by name, artist, uploader, or id.")
+@app_commands.describe(field="Field", query="Search term")
 @app_commands.choices(field=[
     app_commands.Choice(name="Name", value="name"),
     app_commands.Choice(name="Artist", value="artist"),
@@ -293,362 +286,197 @@ async def cmd_search(
 ) -> None:
     results = search_songs(field.value, query)
     if not results:
-        if field.value == "artist":
-            msg = f"Sorry, there is no artist named {query}."
-        elif field.value == "name":
-            msg = f"Sorry, there is no song named {query}."
-        elif field.value == "added_by":
-            msg = f"Sorry, there are no songs added by user {query}."
-        else:
-            msg = f"Sorry, there is no song with ID {query}."
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message("No matching songs found.", ephemeral=True)
         return
-
-    embed = _song_table_embed(
-        results, title=f'🔎 Results: {field.name} = "{query}"'
-    )
+    embed = _song_table_embed(results, title=f'🔎 Results: {field.name} = "{query}"')
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(
-    name="toggle_song",
-    description="Activate or deactivate a song by name (case-insensitive).",
-)
-@app_commands.describe(name="Song name to toggle")
+@bot.tree.command(name="toggle_song", description="Activate/deactivate a song by name.")
+@app_commands.describe(name="Song name")
 async def cmd_toggle_song(interaction: discord.Interaction, name: str) -> None:
     if not is_music_manager(interaction):
         await interaction.response.send_message(
             "❌ You need the **Music Manager** role to toggle songs.", ephemeral=True
         )
         return
-
     matches = get_songs_by_name(name)
     if not matches:
         await interaction.response.send_message(
             f"Sorry, there is no song named {name}.", ephemeral=True
         )
         return
-
     if len(matches) > 1:
         embed = _song_table_embed(matches, title="🔎 Multiple Matches")
         await interaction.response.send_message(
-            f"Multiple songs named **{name}** were found. "
-            "Use `/toggle_song_id` with the specific song ID instead.",
+            f"Multiple songs named **{name}** were found. Use `/toggle_song_id`.",
             embed=embed,
             ephemeral=True,
         )
         return
-
     song = matches[0]
     if song.get("available", 1):
         deactivate_song(song["id"])
-        await interaction.response.send_message(
-            f"⛔ **{song['name']}** by **{song['artist']}** has been deactivated.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(f"⛔ Deactivated **{song['name']}**.", ephemeral=True)
     else:
         activate_song(song["id"])
-        await interaction.response.send_message(
-            f"✅ **{song['name']}** by **{song['artist']}** has been re-activated.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(f"✅ Re-activated **{song['name']}**.", ephemeral=True)
 
 
-@bot.tree.command(
-    name="toggle_song_id",
-    description="Activate or deactivate a song by its unique ID.",
-)
-@app_commands.describe(song_id="The unique song ID")
+@bot.tree.command(name="toggle_song_id", description="Activate/deactivate by song id.")
+@app_commands.describe(song_id="Song ID")
 async def cmd_toggle_song_id(interaction: discord.Interaction, song_id: int) -> None:
     if not is_music_manager(interaction):
         await interaction.response.send_message(
             "❌ You need the **Music Manager** role to toggle songs.", ephemeral=True
         )
         return
-
     song = get_song(song_id)
     if not song:
         await interaction.response.send_message(
             f"Sorry, there is no song with ID {song_id}.", ephemeral=True
         )
         return
-
     if song.get("available", 1):
         deactivate_song(song_id)
-        await interaction.response.send_message(
-            f"⛔ **{song['name']}** by **{song['artist']}** has been deactivated.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(f"⛔ Deactivated **{song['name']}**.", ephemeral=True)
     else:
         activate_song(song_id)
-        await interaction.response.send_message(
-            f"✅ **{song['name']}** by **{song['artist']}** has been re-activated.",
-            ephemeral=True,
-        )
+        await interaction.response.send_message(f"✅ Re-activated **{song['name']}**.", ephemeral=True)
 
 
-@bot.tree.command(
-    name="delete_song_id",
-    description="Begin the two-step delete confirmation for a song by its unique ID.",
-)
-@app_commands.describe(song_id="The unique song ID shown in the song list")
+@bot.tree.command(name="delete_song_id", description="Begin two-step delete by song id.")
+@app_commands.describe(song_id="Song ID")
 async def cmd_delete_song_id(interaction: discord.Interaction, song_id: int) -> None:
     if not is_music_manager(interaction):
         await interaction.response.send_message(
             "❌ You need the **Music Manager** role to delete songs.", ephemeral=True
         )
         return
-
     song = get_song(song_id)
     if not song:
         await interaction.response.send_message(
             f"Sorry, there is no song with ID {song_id}.", ephemeral=True
         )
         return
-
     msg_content = await _build_delete_confirm_message(
         song, interaction.user.id, interaction.client, interaction.guild
     )
-
-    # Non-ephemeral so reactions can be added.
     await interaction.response.send_message(msg_content)
     msg = await interaction.original_response()
-
     await msg.add_reaction(REACT_DEACTIVATE)
     await msg.add_reaction(REACT_HARD_DELETE)
-
-    bot.pending_deletes[msg.id] = {
-        "user_id": interaction.user.id,
-        "song": song,
-    }
-    log.info(
-        "Pending delete started for song %d by user %d (via /delete_song_id)",
-        song_id,
-        interaction.user.id,
-    )
+    bot.pending_deletes[msg.id] = {"user_id": interaction.user.id, "song": song}
 
 
-@bot.tree.command(
-    name="songs",
-    description="Display the full active song library.",
-)
+@bot.tree.command(name="songs", description="Show active songs.")
 async def cmd_songs(interaction: discord.Interaction) -> None:
-    songs = get_all_songs()
-    embed = _song_table_embed(songs)
+    embed = _song_table_embed(get_all_songs())
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(
-    name="songs_all",
-    description="Display all songs including deactivated ones (admin view).",
-)
+@bot.tree.command(name="songs_all", description="Show all songs including deactivated.")
 async def cmd_songs_all(interaction: discord.Interaction) -> None:
-    songs = get_all_songs_admin()
-    embed = _song_table_embed(songs, title="🎵 Song Library (All)")
+    embed = _song_table_embed(get_all_songs_admin(), title="🎵 Song Library (All)")
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(
-    name="set_rigged",
-    description="Secretly designate which song gets injected with a 1-in-10 chance.",
+    name="set_rigged_pool",
+    description="Set rigged song IDs as comma-separated list (empty/0 to clear).",
 )
-@app_commands.describe(song_id="Database id of the song to rig (0 = disable)")
-async def cmd_set_rigged(interaction: discord.Interaction, song_id: int) -> None:
+@app_commands.describe(song_ids="Example: 3,7,12")
+async def cmd_set_rigged_pool(interaction: discord.Interaction, song_ids: str) -> None:
     if not is_music_manager(interaction):
         await interaction.response.send_message(
-            "❌ You need the **Music Manager** role to change the rigged song.",
+            "❌ You need the **Music Manager** role.", ephemeral=True
+        )
+        return
+    raw = [p.strip() for p in song_ids.split(",")]
+    ids: list[int] = []
+    for p in raw:
+        if not p or p == "0":
+            continue
+        try:
+            ids.append(int(p))
+        except ValueError:
+            continue
+    bot.player.set_rigged_songs(ids)
+    if not ids:
+        await interaction.response.send_message("🎭 Rigged song pool cleared.", ephemeral=True)
+    else:
+        await interaction.response.send_message(
+            f"🎭 Rigged song pool set to IDs: {', '.join(str(i) for i in ids)}",
             ephemeral=True,
         )
-        return
-
-    if song_id == 0:
-        bot.player.set_rigged_song(0)
-        await interaction.response.send_message(
-            "🎭 Rigged song disabled.", ephemeral=True
-        )
-        return
-
-    song = get_song(song_id)
-    if not song:
-        await interaction.response.send_message(
-            f"❌ No song found with id `{song_id}`.", ephemeral=True
-        )
-        return
-
-    bot.player.set_rigged_song(song_id)
-    await interaction.response.send_message(
-        f"🎭 Rigged song set to **{song['name']}** by **{song['artist']}** (id `{song_id}`).",
-        ephemeral=True,
-    )
 
 
-@bot.tree.command(name="now_playing", description="Show what is currently playing.")
+@bot.tree.command(name="now_playing", description="Show current song.")
 async def cmd_now_playing(interaction: discord.Interaction) -> None:
     song = bot.player.current_song
     if not song:
-        await interaction.response.send_message(
-            "❌ Nothing is playing right now.", ephemeral=True
-        )
+        await interaction.response.send_message("❌ Nothing is playing right now.", ephemeral=True)
         return
-
     embed = discord.Embed(title="🎵 Now Playing", colour=discord.Colour.green())
     embed.add_field(name="Song", value=song["name"], inline=True)
     embed.add_field(name="Artist", value=song["artist"], inline=True)
-    embed.add_field(name="Times Played", value=str(song["times_played"]), inline=True)
+    embed.add_field(name="Plays", value=str(song.get("times_played", 0)), inline=True)
+    embed.add_field(name="Likes", value=str(song.get("likes", 0)), inline=True)
+    embed.add_field(name="Dislikes", value=str(song.get("dislikes", 0)), inline=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(
-    name="play_broadcast",
-    description=(
-        "Play a radio broadcast clip (Music Manager only). "
-        "Optionally specify a day (MON–SUN) and/or clip number."
-    ),
-)
-@app_commands.describe(
-    day=(
-        "Day of the week to use (MON, TUE, WED, THR/THU, FRI, SAT, SUN). "
-        "Defaults to today."
-    ),
-    clip="Specific clip number to play. Defaults to the next sequential clip.",
-)
-async def cmd_play_broadcast(
+@bot.tree.command(name="play_dj_event", description="Play a random DJ event clip now.")
+@app_commands.describe(day="Optional day abbreviation: MON TUE WED THU FRI SAT SUN")
+async def cmd_play_dj_event(
     interaction: discord.Interaction,
     day: str | None = None,
-    clip: int | None = None,
 ) -> None:
     if not is_music_manager(interaction):
         await interaction.response.send_message(
-            "❌ You need the **Music Manager** role to trigger a broadcast.",
-            ephemeral=True,
+            "❌ You need the **Music Manager** role to trigger DJ events.", ephemeral=True
         )
         return
-
     if not bot.player.is_connected():
         await interaction.response.send_message(
-            "❌ The bot is not connected to a voice channel. Press **▶ Play / Resume** first.",
-            ephemeral=True,
+            "❌ Bot is not connected to voice. Press Play/Resume first.", ephemeral=True
         )
         return
-
-    scheduler = bot.player.broadcast
-    if scheduler is None:
-        await interaction.response.send_message(
-            "❌ The broadcast scheduler is not initialised.", ephemeral=True
-        )
-        return
-
-    # ── Resolve target day ────────────────────────────────────────────
-    _DAY_ABBREVS: dict[str, str] = {
-        "MON": "monday",
-        "TUE": "tuesday",
-        "WED": "wednesday",
-        "THR": "thursday",  # as specified in requirements
-        "THU": "thursday",  # standard three-letter abbreviation alias
-        "FRI": "friday",
-        "SAT": "saturday",
-        "SUN": "sunday",
-    }
-
-    if day is None:
-        target_day = scheduler.today_name()
-    else:
-        target_day = _DAY_ABBREVS.get(day.upper())
+    target_day = None
+    if day:
+        day_map = {
+            "MON": "monday", "TUE": "tuesday", "WED": "wednesday",
+            "THU": "thursday", "FRI": "friday", "SAT": "saturday", "SUN": "sunday",
+        }
+        target_day = day_map.get(day.upper())
         if target_day is None:
             await interaction.response.send_message(
-                f"❌ `{day}` is not a valid day abbreviation.\n"
-                "Use one of: **MON TUE WED THR/THU FRI SAT SUN**",
-                ephemeral=True,
+                "❌ Invalid day. Use MON TUE WED THU FRI SAT SUN.", ephemeral=True
             )
             return
-
-    total = scheduler.total_clips(target_day)
-
-    # ── Case: specific clip number requested ──────────────────────────
-    if clip is not None:
-        if total == 0:
-            await interaction.response.send_message(
-                f"❌ There are no broadcast clips for **{target_day}**.\n"
-                f"Add audio files to `radio/{target_day}/` named `01.mp3`, `02.mp3`, …",
-                ephemeral=True,
-            )
-            return
-
-        if clip < 1 or clip > total:
-            await interaction.response.send_message(
-                f"❌ Clip **{clip}** does not exist for **{target_day}**.\n"
-                f"That day has **{total}** clip(s) — valid range: 1–{total}.",
-                ephemeral=True,
-            )
-            return
-
-        clip_path = scheduler.consume_clip_at(target_day, clip)
-        if clip_path is None:
-            await interaction.response.send_message(
-                f"❌ Clip **{clip}** for **{target_day}** is missing from disk.\n"
-                f"Expected it at `radio/{target_day}/` — please check the file exists.",
-                ephemeral=True,
-            )
-            return
-
-        started = await bot.player.play_broadcast_now(clip_path=clip_path)
-        if started:
-            await interaction.response.send_message(
-                f"📻 Playing broadcast clip **{clip}** of **{total}** for **{target_day}**.",
-                ephemeral=True,
-            )
-            log.info(
-                "Manual broadcast (specific) triggered by user %d: clip %d/%d for %s",
-                interaction.user.id, clip, total, target_day,
-            )
-        else:
-            await interaction.response.send_message(
-                "❌ Could not start the broadcast clip.", ephemeral=True
-            )
-        return
-
-    # ── Case: next sequential clip ────────────────────────────────────
-    remaining = scheduler.clips_remaining(target_day)
-
-    if remaining == 0:
-        if total == 0:
-            await interaction.response.send_message(
-                f"❌ No broadcast clips found for **{target_day}**.\n"
-                f"Add audio files to `radio/{target_day}/` named `01.mp3`, `02.mp3`, …",
-                ephemeral=True,
-            )
-        else:
-            await interaction.response.send_message(
-                f"📻 All **{total}** broadcast clip(s) for **{target_day}** have already played this week.\n"
-                f"They will reset at the start of next week.",
-                ephemeral=True,
-            )
-        return
-
-    clip_number = scheduler.next_clip_number(target_day)
-    started = await bot.player.play_broadcast_now()
+    started = await bot.player.play_dj_event_now(day=target_day)
     if started:
-        await interaction.response.send_message(
-            f"📻 Playing broadcast clip **{clip_number}** of **{total}** for **{target_day}**.",
-            ephemeral=True,
-        )
-        log.info(
-            "Manual broadcast triggered by user %d: clip %d/%d for %s",
-            interaction.user.id, clip_number, total, target_day,
-        )
+        await interaction.response.send_message("🎙️ Playing DJ event now.", ephemeral=True)
     else:
-        await interaction.response.send_message(
-            "❌ Could not start the broadcast clip.", ephemeral=True
-        )
+        await interaction.response.send_message("❌ No DJ event clip available.", ephemeral=True)
 
 
-# ---------------------------------------------------------------------------
-# Run
-# ---------------------------------------------------------------------------
+@bot.tree.command(name="like", description="Like the currently playing song (1 vote/hour).")
+async def cmd_like(interaction: discord.Interaction) -> None:
+    ok, msg = await bot.submit_current_song_feedback(interaction, is_like=True)
+    prefix = "👍" if ok else "❌"
+    await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)
+
+
+@bot.tree.command(name="dislike", description="Dislike the currently playing song (1 vote/hour).")
+async def cmd_dislike(interaction: discord.Interaction) -> None:
+    ok, msg = await bot.submit_current_song_feedback(interaction, is_like=False)
+    prefix = "👎" if ok else "❌"
+    await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)
+
 
 if __name__ == "__main__":
     if not TOKEN:
-        raise RuntimeError(
-            "DISCORD_TOKEN is not set. Copy .env.example to .env and fill it in."
-        )
+        raise RuntimeError("DISCORD_TOKEN is not set. Copy .env.example to .env and fill it in.")
     bot.run(TOKEN)
+

@@ -1,39 +1,40 @@
 """
-player.py – MusicPlayer manages the voice connection, shuffle queue,
-            the rigged-song mechanic, and the radio broadcast scheduler.
-
-Rigged mechanic
----------------
-Every time a new song is selected from the queue there is a
-1-in-RIGGED_CHANCE probability that the designated "rigged" song is
-played instead of whatever was next in the shuffled queue.  The rigged
-song is inserted silently; callers only see the resulting song dict.
-
-Radio broadcast
----------------
-After every BROADCAST_INTERVAL regular songs, if the voice channel has
-at least BROADCAST_MIN_USERS non-bot members, the next clip from
-BroadcastScheduler is silently inserted before the next song.  The
-counter resets after each broadcast.  Clips can also be force-played
-immediately by a Music Manager via /play_broadcast.
+player.py – MusicPlayer with ads, DJ events, weighted songs, and rigged pool.
 """
+from __future__ import annotations
+
 import asyncio
 import logging
 import random
+import time
 from pathlib import Path
 from typing import Optional
 
 import discord
 
-from config import BROADCAST_INTERVAL, BROADCAST_MIN_USERS, FFMPEG_OPTIONS, RIGGED_CHANCE, SONGS_DIR
-from database import get_all_songs, get_song, increment_play_count
+from config import (
+    AD_INTERVAL_MINUTES,
+    ADS_DIR,
+    DJ_CYCLE_HOURS,
+    DJ_EVENT_INTERVAL_MINUTES,
+    FFMPEG_OPTIONS,
+    RIGGED_CHANCE,
+    SONGS_DIR,
+)
+from database import (
+    get_all_songs,
+    get_random_ad,
+    get_song,
+    get_songs_by_ids,
+    increment_ad_play_count,
+    increment_play_count,
+)
 
 log = logging.getLogger(__name__)
 
-# Avoid a circular import: BroadcastScheduler is referenced only as a type.
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from broadcast import BroadcastScheduler
+    from broadcast import DJEventScheduler
 
 
 class MusicPlayer:
@@ -43,277 +44,257 @@ class MusicPlayer:
         self.bot = bot
         self.voice_client: Optional[discord.VoiceClient] = None
         self.current_song: Optional[dict] = None
+        self._rigged_song_ids: list[int] = []
+        self.dj_events: Optional["DJEventScheduler"] = None
 
-        # Shuffled play-queue; rebuilt automatically when empty.
-        self._queue: list[dict] = []
-
-        # Id of the song to secretly inject (0 = disabled).
-        self._rigged_song_id: int = 0
-
-        # Broadcast scheduler; None until set by the bot on startup.
-        self.broadcast: Optional["BroadcastScheduler"] = None
-
-        # Counts regular songs played since the last broadcast clip.
-        self._songs_since_broadcast: int = 0
-
-        # When True, the next play_next() call plays a broadcast clip immediately,
-        # bypassing the interval counter and user-count check.
-        self._force_broadcast: bool = False
-
-        # When set, _play_broadcast_clip will use this path directly instead of
-        # calling consume_next_clip().  Cleared immediately after use.
         self._forced_clip_path: Optional[Path] = None
+        self._forced_label: str = "intermission"
+
+        self._cycle_started_at: float = time.monotonic()
+        self._last_ad_at: float = self._cycle_started_at
+        self._last_dj_event_at: float = self._cycle_started_at
+        self._intro_pending: bool = True
 
     # ------------------------------------------------------------------
     # Configuration
     # ------------------------------------------------------------------
 
-    def set_rigged_song(self, song_id: int) -> None:
-        self._rigged_song_id = song_id
+    def set_rigged_songs(self, song_ids: list[int]) -> None:
+        self._rigged_song_ids = [sid for sid in song_ids if sid > 0]
 
     @property
-    def rigged_song_id(self) -> int:
-        return self._rigged_song_id
+    def rigged_song_ids(self) -> tuple[int, ...]:
+        return tuple(self._rigged_song_ids)
 
-    def set_broadcast(self, scheduler: "BroadcastScheduler") -> None:
-        """Attach the BroadcastScheduler that provides daily intermission clips."""
-        self.broadcast = scheduler
-
-    # ------------------------------------------------------------------
-    # Broadcast helpers
-    # ------------------------------------------------------------------
-
-    def _should_play_broadcast(self) -> bool:
-        """Return True when all conditions for an automatic broadcast insertion are met.
-
-        Conditions (all must hold):
-        * A BroadcastScheduler is attached.
-        * Enough regular songs have played since the last broadcast.
-        * The voice channel has at least BROADCAST_MIN_USERS non-bot members.
-        * There is a clip available for today.
-        """
-        if self.broadcast is None:
-            return False
-        if self._songs_since_broadcast < BROADCAST_INTERVAL:
-            return False
-        if not (self.voice_client and self.voice_client.channel):
-            return False
-        user_count = sum(
-            1 for m in self.voice_client.channel.members if not m.bot
-        )
-        if user_count < BROADCAST_MIN_USERS:
-            return False
-        return self.broadcast.peek_next_clip() is not None
-
-    async def _play_broadcast_clip(self) -> bool:
-        """Consume the next broadcast clip for today and start playing it.
-
-        If ``_forced_clip_path`` is set it is used directly (and cleared)
-        instead of consuming the next sequential clip.
-        Resets the song-since-broadcast counter.
-        Returns True if a clip was started, False if no clip is available
-        or the voice client is not connected.
-        """
-        if not (self.voice_client and self.voice_client.is_connected()):
-            return False
-        if self.broadcast is None:
-            return False
-
-        if self._forced_clip_path is not None:
-            clip_path: Optional[Path] = self._forced_clip_path
-            self._forced_clip_path = None
-        else:
-            clip_path = self.broadcast.consume_next_clip()
-
-        if clip_path is None:
-            return False
-
-        self._songs_since_broadcast = 0
-
-        def _after(error: Optional[Exception]) -> None:
-            if error:
-                log.error("Broadcast playback error: %s", error)
-            asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop)
-
-        self.voice_client.play(
-            discord.FFmpegPCMAudio(str(clip_path), **FFMPEG_OPTIONS),
-            after=_after,
-        )
-        log.info("Playing broadcast clip: %s", clip_path.name)
-        return True
-
-    async def play_broadcast_now(
-        self, clip_path: Optional[Path] = None
-    ) -> bool:
-        """Force a broadcast clip to play immediately (Music Manager override).
-
-        If *clip_path* is provided that exact file is played; otherwise the
-        next sequential clip for today is used.
-
-        If a song is currently playing it is stopped first; the ``_after``
-        callback then picks up the broadcast via the ``_force_broadcast`` flag
-        so there is no double-play race.
-
-        Returns True if a clip will be (or has been) started.
-        """
-        if not (self.voice_client and self.voice_client.is_connected()):
-            return False
-        if self.broadcast is None:
-            return False
-
-        if clip_path is None:
-            # Sequential mode: make sure there is a next clip.
-            if self.broadcast.peek_next_clip() is None:
-                return False
-        else:
-            # Explicit clip: store it so _play_broadcast_clip picks it up.
-            self._forced_clip_path = clip_path
-
-        if self.voice_client.is_playing() or self.voice_client.is_paused():
-            # Signal play_next (triggered by the _after of the stopped song)
-            # to play a broadcast clip rather than the next queue item.
-            self._force_broadcast = True
-            self.voice_client.stop()
-            return True
-
-        # Nothing playing — directly start the clip.
-        return await self._play_broadcast_clip()
-
-    # ------------------------------------------------------------------
-    # Queue management
-    # ------------------------------------------------------------------
-
-    def _build_queue(self) -> None:
-        """Populate and shuffle the queue from the full song library."""
-        songs = get_all_songs()
-        if not songs:
-            self._queue = []
-            return
-        self._queue = list(songs)
-        random.shuffle(self._queue)
-
-    def _pick_next(self) -> Optional[dict]:
-        """
-        Return the next song to play, applying the rigged-song mechanic.
-
-        With probability 1/RIGGED_CHANCE the rigged song is returned
-        regardless of queue position (the queue item that would have
-        played is left in-place for the next pick).
-        """
-        # Rigged roll
-        if self._rigged_song_id and random.randint(1, RIGGED_CHANCE) == 1:
-            rigged = get_song(self._rigged_song_id)
-            if rigged and rigged.get("available", 1):
-                return rigged
-
-        # Normal queue pick
-        if not self._queue:
-            self._build_queue()
-        if self._queue:
-            return self._queue.pop(0)
-        return None
+    def set_dj_events(self, scheduler: "DJEventScheduler") -> None:
+        self.dj_events = scheduler
 
     # ------------------------------------------------------------------
     # Voice connection
     # ------------------------------------------------------------------
 
     async def connect(self, channel: discord.VoiceChannel) -> None:
-        """Join or move to *channel*."""
         if self.voice_client and self.voice_client.is_connected():
             await self.voice_client.move_to(channel)
         else:
             self.voice_client = await channel.connect()
+        self._reset_cycle()
 
     async def disconnect(self) -> None:
-        """Leave the voice channel and reset state."""
         if self.voice_client:
             await self.voice_client.disconnect()
             self.voice_client = None
         self.current_song = None
+        self._reset_cycle()
+
+    # ------------------------------------------------------------------
+    # Intermission scheduling
+    # ------------------------------------------------------------------
+
+    def _reset_cycle(self) -> None:
+        now = time.monotonic()
+        self._cycle_started_at = now
+        self._last_ad_at = now
+        self._last_dj_event_at = now
+        self._intro_pending = True
+
+    @staticmethod
+    def _seconds(minutes: int) -> float:
+        return float(minutes * 60)
+
+    def _cycle_expired(self) -> bool:
+        return (time.monotonic() - self._cycle_started_at) >= float(DJ_CYCLE_HOURS * 3600)
+
+    def _ad_due(self) -> bool:
+        return (time.monotonic() - self._last_ad_at) >= self._seconds(AD_INTERVAL_MINUTES)
+
+    def _dj_due(self) -> bool:
+        return (time.monotonic() - self._last_dj_event_at) >= self._seconds(DJ_EVENT_INTERVAL_MINUTES)
+
+    def _play_audio_file(self, path: Path, label: str) -> bool:
+        if not (self.voice_client and self.voice_client.is_connected()):
+            return False
+        if not path.exists():
+            return False
+
+        def _after(error: Optional[Exception]) -> None:
+            if error:
+                log.error("%s playback error: %s", label, error)
+            asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop)
+
+        self.voice_client.play(
+            discord.FFmpegPCMAudio(str(path), **FFMPEG_OPTIONS),
+            after=_after,
+        )
+        log.info("Playing %s: %s", label, path.name)
+        return True
+
+    async def _play_forced_clip(self) -> bool:
+        if self._forced_clip_path is None:
+            return False
+        path = self._forced_clip_path
+        label = self._forced_label
+        self._forced_clip_path = None
+        if self._play_audio_file(path, label):
+            if label == "ad":
+                self._last_ad_at = time.monotonic()
+            elif label.startswith("dj"):
+                self._last_dj_event_at = time.monotonic()
+            return True
+        return False
+
+    async def _play_dj_intro(self) -> bool:
+        if self.dj_events is None:
+            self._intro_pending = False
+            return False
+        clip = self.dj_events.intro_clip()
+        self._intro_pending = False
+        if clip and self._play_audio_file(clip, "dj intro"):
+            self._last_dj_event_at = time.monotonic()
+            return True
+        return False
+
+    async def _play_dj_outro_and_restart(self) -> bool:
+        if self.dj_events is None:
+            self._reset_cycle()
+            return False
+        clip = self.dj_events.outro_clip()
+        self._reset_cycle()
+        if clip and self._play_audio_file(clip, "dj outro"):
+            return True
+        return False
+
+    async def _play_hourly_dj_event(self, day: str | None = None) -> bool:
+        if self.dj_events is None:
+            return False
+        clip = self.dj_events.random_hourly_clip(day)
+        if clip and self._play_audio_file(clip, "dj event"):
+            self._last_dj_event_at = time.monotonic()
+            return True
+        return False
+
+    async def _play_ad(self) -> bool:
+        ad = get_random_ad()
+        if not ad:
+            return False
+        path = ADS_DIR / ad["filename"]
+        if self._play_audio_file(path, "ad"):
+            self._last_ad_at = time.monotonic()
+            increment_ad_play_count(ad["id"])
+            return True
+        return False
+
+    # ------------------------------------------------------------------
+    # Public manual trigger APIs
+    # ------------------------------------------------------------------
+
+    async def play_dj_event_now(self, day: str | None = None) -> bool:
+        if not (self.voice_client and self.voice_client.is_connected()):
+            return False
+        if self.dj_events is None:
+            return False
+        clip = self.dj_events.random_hourly_clip(day)
+        if clip is None:
+            return False
+        self._forced_clip_path = clip
+        self._forced_label = "dj event"
+        if self.voice_client.is_playing() or self.voice_client.is_paused():
+            self.voice_client.stop()
+            return True
+        return await self._play_forced_clip()
+
+    # ------------------------------------------------------------------
+    # Song selection
+    # ------------------------------------------------------------------
+
+    def _pick_next_song(self) -> Optional[dict]:
+        songs = get_all_songs()
+        if not songs:
+            return None
+
+        rigged_pool = get_songs_by_ids(self._rigged_song_ids)
+        rigged_ids = {s["id"] for s in rigged_pool}
+        normal_songs = [s for s in songs if s["id"] not in rigged_ids]
+
+        if rigged_pool and random.randint(1, RIGGED_CHANCE) == 1:
+            return random.choice(rigged_pool)
+
+        if not normal_songs:
+            if rigged_pool:
+                return random.choice(rigged_pool)
+            return None
+
+        counts = {
+            s["id"]: (int(s.get("times_played", 0)) + int(s.get("likes", 0)) - int(s.get("dislikes", 0)))
+            for s in normal_songs
+        }
+        max_count = max(counts.values()) if counts else 0
+        weights = [max_count - counts[s["id"]] + 1 for s in normal_songs]
+        return random.choices(normal_songs, weights=weights, k=1)[0]
 
     # ------------------------------------------------------------------
     # Playback control
     # ------------------------------------------------------------------
 
     async def play_next(self) -> Optional[dict]:
-        """
-        Pick and play the next song (or broadcast clip).
-
-        Priority order:
-        1. Force-broadcast flag set (Music Manager manual override).
-        2. Automatic broadcast: interval elapsed and user-count threshold met.
-        3. Normal shuffled queue (with rigged-song mechanic).
-
-        Returns the song dict that started playing, or *None* if there
-        is nothing to play (empty library or no voice connection) or when
-        a broadcast clip was started instead of a regular song.
-        """
-        if not self.voice_client or not self.voice_client.is_connected():
+        if not (self.voice_client and self.voice_client.is_connected()):
             return None
 
-        # 1. Force-broadcast (manual override via play_broadcast_now).
-        if self._force_broadcast:
-            self._force_broadcast = False
-            if await self._play_broadcast_clip():
-                return None
+        if await self._play_forced_clip():
+            return None
 
-        # 2. Automatic broadcast insertion.
-        if self._should_play_broadcast():
-            if await self._play_broadcast_clip():
-                return None
+        if self._intro_pending and await self._play_dj_intro():
+            return None
 
-        # 3. Normal song.
-        song = self._pick_next()
+        if self._cycle_expired() and await self._play_dj_outro_and_restart():
+            return None
+
+        if self._ad_due() and await self._play_ad():
+            return None
+
+        if self._dj_due() and await self._play_hourly_dj_event():
+            return None
+
+        song = self._pick_next_song()
         if song is None:
             self.current_song = None
             return None
 
-        # Re-fetch to confirm the song is still available (it may have been
-        # deactivated after the queue was built but before playback started).
         fresh = get_song(song["id"])
         if not fresh or not fresh.get("available", 1):
             return await self.play_next()
 
         song_path = SONGS_DIR / song["filename"]
         if not song_path.exists():
-            # Skip missing files silently and try the next one.
             return await self.play_next()
 
-        self.current_song = song
-        self._songs_since_broadcast += 1
+        self.current_song = fresh
         increment_play_count(song["id"])
 
         def _after(error: Optional[Exception]) -> None:
             if error:
                 log.error("Playback error: %s", error)
-            # Schedule the next song on the event loop.
             asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop)
 
         self.voice_client.play(
             discord.FFmpegPCMAudio(str(song_path), **FFMPEG_OPTIONS),
             after=_after,
         )
-        return song
+        return fresh
 
     def pause(self) -> bool:
-        """Pause playback. Returns *True* on success."""
         if self.voice_client and self.voice_client.is_playing():
             self.voice_client.pause()
             return True
         return False
 
     def resume(self) -> bool:
-        """Resume playback. Returns *True* on success."""
         if self.voice_client and self.voice_client.is_paused():
             self.voice_client.resume()
             return True
         return False
 
     def skip(self) -> bool:
-        """
-        Stop the current song (triggering the *after* callback which
-        will start the next one).  Returns *True* on success.
-        """
         if self.voice_client and (
             self.voice_client.is_playing() or self.voice_client.is_paused()
         ):
@@ -336,3 +317,4 @@ class MusicPlayer:
 
     def is_active(self) -> bool:
         return self.is_playing() or self.is_paused()
+

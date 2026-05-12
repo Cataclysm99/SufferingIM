@@ -385,7 +385,7 @@ class MusicControlView(discord.ui.View):
                 ephemeral=True,
             )
         elif player.is_playing():
-            # A broadcast clip started instead of a regular song.
+            # An intermission clip (ad/DJ) started instead of a regular song.
             await interaction.followup.send("▶ Playback started.", ephemeral=True)
         else:
             await interaction.followup.send(
@@ -508,3 +508,37 @@ class MusicControlView(discord.ui.View):
             )
             return
         await interaction.response.send_modal(DeleteSongModal())
+
+    # ------------------------------------------------------------------
+    # Row 2 – feedback
+    # ------------------------------------------------------------------
+
+    @discord.ui.button(
+        label="👍 Like Current",
+        style=discord.ButtonStyle.success,
+        custom_id="music:like_current",
+        row=2,
+    )
+    async def like_current(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        ok, msg = await interaction.client.submit_current_song_feedback(  # type: ignore[attr-defined]
+            interaction, is_like=True
+        )
+        prefix = "👍" if ok else "❌"
+        await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)
+
+    @discord.ui.button(
+        label="👎 Dislike Current",
+        style=discord.ButtonStyle.secondary,
+        custom_id="music:dislike_current",
+        row=2,
+    )
+    async def dislike_current(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        ok, msg = await interaction.client.submit_current_song_feedback(  # type: ignore[attr-defined]
+            interaction, is_like=False
+        )
+        prefix = "👎" if ok else "❌"
+        await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)

@@ -1,223 +1,150 @@
 # SufferingIM
 
-A **rigged** Discord music bot that shuffles a playlist of local audio files and secretly has a **1-in-10 chance** of playing a designated "rigged" song.
+Discord music bot with:
+- weighted blind song selection
+- rigged-song pool
+- ad intermissions (~30 minutes)
+- DJ events (~60 minutes) with intro/outro 6-hour cycle
+- persistent controller buttons + slash commands
+- Sunday `HeavenFM` branding / Monday `SufferingFM` branding
 
-## Features
+---
 
-| Feature | Details |
-|---|---|
-| Shuffle playlist | All songs in the library are shuffled and played in random order. |
-| Rigged song | With 1-in-10 probability the bot silently plays a pre-set song instead of the queued one. |
-| Persistent controller | A button panel posted in a Discord channel survives bot restarts. |
-| Song library | Songs are tracked in SQLite with id, name, artist, added\_by, filename, times\_played, and available flag. |
-| File management | Audio files are stored in `songs/` and managed via Discord commands. |
-| Role-gated management | Add, delete, toggle, upload, and rig commands are restricted to a configurable **Music Manager** role (see `MUSIC_MANAGER_ROLE_ID`). |
-| Radio broadcasts | Pre-recorded intermission clips organised by weekday play silently between songs when enough users are in the call; Music Managers can also force-play the next clip at any time. |
+## Add the bot to a server (least-privilege setup)
 
-## Permissions
+### 1) Create app + bot
+1. Go to https://discord.com/developers/applications
+2. Create application → **Bot** tab → create bot
+3. Copy token into `.env` as `DISCORD_TOKEN`
 
-Set `MUSIC_MANAGER_ROLE_ID` in `.env` to the Discord role ID that should be allowed to manage the song library.  
-When set to `0` (the default) everyone can manage songs, which is useful for testing.
+### 2) Enable gateway intents
+In **Bot** tab, enable:
+- **Message Content Intent** (required by this bot)
 
-| Action | Who can do it |
-|---|---|
-| Play, Pause, Skip, Leave | Everyone |
-| View playlist (active songs) | Everyone |
-| View full library (including deactivated) | Everyone |
-| Upload / Add / Delete / Toggle songs | Music Manager role (or server Administrator) |
-| Set rigged song | Music Manager role (or server Administrator) |
-| Force-play next broadcast clip | Music Manager role (or server Administrator) |
+`Voice States` is not a privileged toggle in the portal; it is requested by code and used at runtime.
 
-## Controller Buttons
+### 3) Invite URL (OAuth2)
+Use **OAuth2 → URL Generator**:
+- Scopes: `bot`, `applications.commands`
+- Recommended bot permissions (minimal for full current feature set):
+  - View Channels
+  - Send Messages
+  - Embed Links
+  - Add Reactions
+  - Read Message History
+  - Connect
+  - Speak
+  - Use Voice Activity
+  - Attach Files (for `/upload_song`)
+  - Manage Messages (for clearing reactions after delete confirmation)
 
-**Row 1 – Playback**
-| Button | Action |
-|---|---|
-| ▶ Play / Resume | Join the user's voice channel and start the queue, or resume if paused. |
-| ⏸ Pause | Pause the current song. |
-| ⏭ Skip | Skip to the next song. |
-| 📞 Leave | Disconnect the bot from the voice channel. |
+> Expansion note: if future features require role edits, channel creation, or moderation, add those permissions explicitly at that time rather than granting Administrator now.
 
-**Row 2 – Library**
-| Button | Who | Action |
-|---|---|---|
-| 📋 Playlist | Everyone | Show only the currently active (available) songs. |
-| 📚 Full Library | Everyone | Show all songs including deactivated ones — useful for requesting a re-enable. |
-| ➕ Add Song | Music Manager | Open a modal to register a file already in `songs/`. |
-| 🗑 Delete Song | Music Manager | Open a modal to start the two-step delete by song name. |
-
-## Slash Commands
-
-| Command | Who | Description |
-|---|---|---|
-| `/controller` | Everyone | Post (or re-post) the controller panel in the current channel. |
-| `/search` | Everyone | Search the library by name, artist, added\_by user ID, or song id. |
-| `/songs` | Everyone | Display active (available) songs only. |
-| `/songs_all` | Everyone | Display all songs including deactivated ones. |
-| `/now_playing` | Everyone | Show the song currently playing. |
-| `/upload_song` | Music Manager | Upload an audio file attachment and add it to the library. |
-| `/toggle_song` | Music Manager | Activate or deactivate a song by name. |
-| `/toggle_song_id` | Music Manager | Activate or deactivate a song by its unique id. |
-| `/delete_song_id` | Music Manager | Start the two-step delete confirmation for a specific song id. |
-| `/set_rigged song_id` | Music Manager | Set which song is secretly rigged (0 to disable). |
-| `/play_broadcast` | Music Manager | Immediately play the next broadcast clip for today, bypassing the normal interval and user-count check. |
-
-## Prerequisites
-
-- Python 3.10+
-- **FFmpeg** installed and on `PATH` (required for audio playback).
-- A Discord bot with the following intents enabled in the Developer Portal:
-  - **Message Content Intent**
-  - **Voice States** (automatically enabled for bots)
+---
 
 ## Setup
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/Cataclysm99/SufferingIM.git
 cd SufferingIM
-
-# 2. Create a virtual environment (recommended)
 python -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-
-# 3. Install dependencies
 pip install -r requirements.txt
-
-# 4. Configure environment variables
 cp .env.example .env
-# Edit .env and fill in DISCORD_TOKEN, CONTROLLER_CHANNEL_ID, RIGGED_SONG_ID,
-# and optionally MUSIC_MANAGER_ROLE_ID (right-click a role → Copy Role ID)
-
-# 5. (Optional) Pre-populate the songs folder
-cp /path/to/my_song.mp3 songs/
-
-# 6. Run the bot
 python bot.py
 ```
 
-## Adding Songs
+Also install FFmpeg and ensure it is on PATH.
 
-**Option A – Upload via Discord**
-```
-/upload_song  file:<attach audio>  name:Song Name  artist:Artist Name
-```
-The file is saved to `songs/` and registered in the database automatically.
+---
 
-**Option B – Copy file manually then register**
-1. Copy the audio file to the `songs/` directory on the host machine.
-2. Click **➕ Add Song** in the controller and fill in the modal.
+## Runtime folders
 
-## Managing Songs
-
-### Deleting a song (two-step confirmation)
-
-Click **🗑 Delete Song** or run `/delete_song_id <id>`.  
-The bot posts a confirmation message and adds two reactions:
-
-| Reaction | Effect |
-|---|---|
-| ✅ | **Deactivate** – removes the song from the playlist queue but keeps the database row and audio file. Use `/toggle_song` or `/toggle_song_id` to re-enable it later. |
-| 🗑️ | **Permanently delete** – removes the row from the database **and** deletes the audio file from `songs/`. |
-
-Only the user who triggered the deletion can react to confirm it.
-
-**Duplicate song names:** if more than one song shares the same name the bot shows each match with its unique ID, artist, and the username of who added it, then asks you to use `/delete_song_id <id>` to target the correct one. Reacting on that informational message does *not* delete anything.
-
-### Temporarily removing a song
-
-```
-/toggle_song  name:Song Name
-/toggle_song_id  song_id:3
+```text
+songs/               # normal songs
+ads/                 # ad audio clips
+dj_events/
+  monday/
+    intro.mp3
+    outro.mp3
+    ... hourly random DJ clips ...
+  tuesday/
+  ...
+  sunday/
 ```
 
-Toggles `available` between active and deactivated.  Deactivated songs are hidden from the queue and `/search` but their audio file stays on disk, making them easy to re-add without re-uploading.
+All audio extensions in config are supported (`.mp3`, `.wav`, `.ogg`, `.flac`, `.m4a`, `.aac`, `.opus`).
 
-### Searching the library
+---
 
-```
-/search  field:Artist  query:Queen
-/search  field:Name    query:Bohemian
-/search  field:ID      query:3
-```
+## Current architecture decisions
 
-If nothing matches you'll get a plain-English clarification, e.g. *"Sorry, there is no artist named Bloopity Bloop bloop."*
+### Playback flow (priority)
+On every transition to next track:
+1. Forced/manual intermission clip (if requested)
+2. DJ intro at cycle start
+3. DJ outro when 6-hour cycle expires (then cycle restarts)
+4. Ad if due (~`AD_INTERVAL_MINUTES`)
+5. DJ hourly event if due (~`DJ_EVENT_INTERVAL_MINUTES`)
+6. Song selection
 
-## Rigged Song
+### DJ events model
+- Old sequential weekly broadcast state removed
+- No `radio_state.json` tracking needed for DJ events
+- Intro first, outro at cycle boundary, random hourly events per weekday
 
-The rigged song is stored in the library like any other song.  Set it with:
-```
-/set_rigged song_id:3
-```
-Every time the bot picks the next song to play it rolls a 10-sided die.
-On a roll of 1 the rigged song plays instead of whatever was queued next — silently and without any indication to listeners.
+### Song selection model
+- No persistent queue
+- If rigged check hits (`1 / RIGGED_CHANCE`), choose randomly from `RIGGED_SONG_IDS`
+- Otherwise weighted normal selection:
+  - score = `times_played + likes - dislikes`
+  - weight = `max(score_set) - score + 1`
+  - higher dislikes increase chance; higher likes decrease chance
 
-## Radio Broadcast Intermissions
+### Feedback model
+- `/like`, `/dislike` and controller buttons are available
+- One vote per user per hour globally
+- Feedback updates song weight inputs (`likes`, `dislikes`)
 
-Pre-recorded radio clips are mixed silently into the song queue, playing one clip after every few songs when enough users are in the call.  Each day of the week has its own sequential storyline.
+### Branding model
+- Sunday: switch toward HeavenFM config values/assets
+- Monday onward: switch back to SufferingFM config values/assets
+- Name/avatar/banner paths are optional config values
 
-### File layout
+### Database model
+- Since deployment starts from fresh DB, migration logic was removed
+- `init_db()` now creates required tables directly:
+  - `songs` (includes likes/dislikes)
+  - `ads`
+  - `vote_cooldowns`
 
-```
-radio/
-├── monday/
-│   ├── 01.mp3
-│   ├── 02.mp3
-│   └── ...
-├── tuesday/
-│   ├── 01.mp3
-│   └── ...
-└── ... (wednesday through sunday)
-```
+---
 
-* **Naming**: files must be named numerically — `01.mp3`, `02.mp3`, …, `10.mp3`, etc.  Zero-padded names are recommended so they sort correctly on all systems.
-* **Format**: any format supported by the bot (`.mp3`, `.wav`, `.ogg`, `.flac`, `.m4a`, `.aac`, `.opus`).
-* **Order**: clips play in ascending filename order.  The sequence is remembered across bot restarts (`radio_state.json`).
+## Commands (core)
 
-### Playback rules
+- `/controller` – post control panel
+- `/upload_song` – upload + register a song (Music Manager)
+- `/songs`, `/songs_all`, `/search`
+- `/toggle_song`, `/toggle_song_id` (Music Manager)
+- `/delete_song_id` (Music Manager, reaction-confirmed)
+- `/set_rigged_pool` (Music Manager, comma-separated IDs)
+- `/play_dj_event` (Music Manager)
+- `/now_playing`
+- `/like`, `/dislike`
 
-| Rule | Detail |
-|---|---|
-| User threshold | A broadcast only plays automatically when there are at least **`BROADCAST_MIN_USERS`** non-bot members in the voice channel (default: 3). |
-| Interval | One clip is inserted after every **`BROADCAST_INTERVAL`** regular songs (default: 3).  The counter is per-session and resets after each clip. |
-| Weekly reset | At the start of each ISO week (Monday) the per-day index resets to clip 1, so the story starts fresh the following week regardless of how many clips were heard. |
-| No-pressure design | If the user threshold is never met (or there are no clips for the day), no broadcast plays — normal music continues uninterrupted. |
+Buttons mirror the same core actions.
 
-### Configuration
+---
 
-```env
-BROADCAST_MIN_USERS=3   # minimum non-bot users in VC (0 = always broadcast)
-BROADCAST_INTERVAL=3    # songs between each automatic broadcast insertion
-```
+## Config highlights (`.env`)
 
-### Manual override
+- `MUSIC_MANAGER_ROLE_ID=0` means unrestricted manager actions
+- `RIGGED_SONG_IDS=3,7,12`
+- `RIGGED_CHANCE=10`
+- `AD_INTERVAL_MINUTES=30`
+- `DJ_EVENT_INTERVAL_MINUTES=60`
+- `DJ_CYCLE_HOURS=6`
+- Sunday/Monday branding settings:
+  - `SUFFERING_BOT_NAME`, `HEAVEN_BOT_NAME`
+  - optional avatar/banner paths
 
-Music Managers can force the next clip to play immediately:
-```
-/play_broadcast
-```
-This ignores the interval counter and user-count check, stops the current song if one is playing, and plays the next clip in the sequence.
-
-## File Structure
-
-```
-SufferingIM/
-├── bot.py          # Entry point
-├── broadcast.py    # BroadcastScheduler (daily radio clip sequencing)
-├── config.py       # Environment / path configuration
-├── database.py     # SQLite CRUD helpers
-├── player.py       # MusicPlayer (queue, rigged mechanic, broadcast, FFmpeg)
-├── views.py        # Persistent Discord UI (buttons + modals)
-├── requirements.txt
-├── .env.example
-├── songs/          # Audio files (not tracked in git)
-│   └── .gitkeep
-└── radio/          # Broadcast clips organised by weekday (not tracked in git)
-    ├── monday/     # e.g. 01.mp3  02.mp3  …
-    ├── tuesday/
-    ├── wednesday/
-    ├── thursday/
-    ├── friday/
-    ├── saturday/
-    └── sunday/
-```
