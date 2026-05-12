@@ -28,6 +28,8 @@ from database import (
     get_songs_by_ids,
     increment_ad_play_count,
     increment_play_count,
+    reset_negative_vote_scores,
+    reset_song_vote_score,
 )
 
 log = logging.getLogger(__name__)
@@ -157,9 +159,11 @@ class MusicPlayer:
     async def _play_dj_outro_and_restart(self) -> bool:
         if self.dj_events is None:
             self._reset_cycle()
+            reset_negative_vote_scores()
             return False
         clip = self.dj_events.outro_clip()
         self._reset_cycle()
+        reset_negative_vote_scores()
         if clip and self._play_audio_file(clip, "dj outro"):
             return True
         return False
@@ -219,20 +223,29 @@ class MusicPlayer:
         if rigged_pool and random.randint(1, RIGGED_CHANCE) == 1:
             return random.choice(rigged_pool)
 
-        if not normal_songs:
+        # Exclude songs with a negative vote_score (net-liked → disabled until cycle reset).
+        selectable = [s for s in normal_songs if int(s.get("vote_score", 0)) >= 0]
+
+        if not selectable:
             if rigged_pool:
                 return random.choice(rigged_pool)
             return None
 
-        counts = {
-            s["id"]: (int(s.get("times_played", 0)) + int(s.get("likes", 0)) - int(s.get("dislikes", 0)))
-            for s in normal_songs
-        }
-        # Higher score means "played/liked more" and therefore should be selected less.
-        # Dislikes reduce score, so they increase eventual weight/chance.
-        max_count = max(counts.values()) if counts else 0
-        weights = [max_count - counts[s["id"]] + 1 for s in normal_songs]
-        return random.choices(normal_songs, weights=weights, k=1)[0]
+        # Weight calculation:
+        #   vote_score > 0 (net-disliked) → max possible weight (highest chance)
+        #   vote_score == 0               → inverse of times_played
+        max_played = max(int(s.get("times_played", 0)) for s in selectable)
+        max_weight = max_played + 1  # weight a never-played song would receive
+
+        weights = []
+        for s in selectable:
+            vs = int(s.get("vote_score", 0))
+            if vs > 0:
+                weights.append(max_weight)
+            else:
+                weights.append(max_played - int(s.get("times_played", 0)) + 1)
+
+        return random.choices(selectable, weights=weights, k=1)[0]
 
     # ------------------------------------------------------------------
     # Playback control
@@ -272,6 +285,7 @@ class MusicPlayer:
 
         self.current_song = fresh
         increment_play_count(song["id"])
+        reset_song_vote_score(song["id"])
 
         def _after(error: Optional[Exception]) -> None:
             if error:

@@ -33,8 +33,7 @@ def init_db() -> None:
                 filename     TEXT    NOT NULL,
                 times_played INTEGER NOT NULL DEFAULT 0,
                 available    INTEGER NOT NULL DEFAULT 1,
-                likes        INTEGER NOT NULL DEFAULT 0,
-                dislikes     INTEGER NOT NULL DEFAULT 0
+                vote_score   INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -51,8 +50,10 @@ def init_db() -> None:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS vote_cooldowns (
-                user_id      TEXT PRIMARY KEY,
-                last_vote_at REAL NOT NULL
+                user_id  TEXT    NOT NULL,
+                song_id  INTEGER NOT NULL,
+                voted_at REAL    NOT NULL,
+                PRIMARY KEY (user_id, song_id)
             )
             """
         )
@@ -179,38 +180,56 @@ def get_songs_by_ids(song_ids: list[int]) -> list[dict]:
 
 
 def apply_song_feedback(song_id: int, user_id: int, is_like: bool) -> tuple[bool, str]:
-    """Apply like/dislike if user cooldown allows one vote per hour."""
+    """Apply like/dislike per-song-per-user with a one-hour cooldown.
+
+    like  → vote_score -= 1  (song becomes more likely to be skipped/disabled)
+    dislike → vote_score += 1  (song gets a probability bump)
+    A user may vote on multiple songs per hour, but not the same song twice in an hour.
+    """
     now = time.time()
     uid = str(user_id)
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT last_vote_at FROM vote_cooldowns WHERE user_id = ?",
-            (uid,),
+            "SELECT voted_at FROM vote_cooldowns WHERE user_id = ? AND song_id = ?",
+            (uid, song_id),
         ).fetchone()
         if row is not None:
-            elapsed = now - float(row["last_vote_at"])
+            elapsed = now - float(row["voted_at"])
             if elapsed < 3600:
                 minutes = int((3600 - elapsed) // 60) + 1
-                return False, f"You can vote again in about {minutes} minute(s)."
+                return False, f"You already voted on this song. Try again in about {minutes} minute(s)."
             conn.execute(
-                "UPDATE vote_cooldowns SET last_vote_at = ? WHERE user_id = ?",
-                (now, uid),
+                "UPDATE vote_cooldowns SET voted_at = ? WHERE user_id = ? AND song_id = ?",
+                (now, uid, song_id),
             )
         else:
             conn.execute(
-                "INSERT INTO vote_cooldowns (user_id, last_vote_at) VALUES (?, ?)",
-                (uid, now),
+                "INSERT INTO vote_cooldowns (user_id, song_id, voted_at) VALUES (?, ?, ?)",
+                (uid, song_id, now),
             )
 
-        if is_like:
-            conn.execute("UPDATE songs SET likes = likes + 1 WHERE id = ?", (song_id,))
-        else:
-            conn.execute(
-                "UPDATE songs SET dislikes = dislikes + 1 WHERE id = ?",
-                (song_id,),
-            )
+        # Like = -1 (decreases score toward disabled), Dislike = +1 (bumps weight)
+        delta = -1 if is_like else 1
+        conn.execute(
+            "UPDATE songs SET vote_score = vote_score + ? WHERE id = ?",
+            (delta, song_id),
+        )
         conn.commit()
     return True, "Vote recorded."
+
+
+def reset_song_vote_score(song_id: int) -> None:
+    """Reset vote_score to 0 after a song plays."""
+    with _get_conn() as conn:
+        conn.execute("UPDATE songs SET vote_score = 0 WHERE id = ?", (song_id,))
+        conn.commit()
+
+
+def reset_negative_vote_scores() -> None:
+    """Reset all negative vote_scores to 0 (called on DJ cycle restart)."""
+    with _get_conn() as conn:
+        conn.execute("UPDATE songs SET vote_score = 0 WHERE vote_score < 0")
+        conn.commit()
 
 
 # ---------------------------------------------------------------------------

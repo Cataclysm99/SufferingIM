@@ -514,7 +514,7 @@ class MusicControlView(discord.ui.View):
     # ------------------------------------------------------------------
 
     @discord.ui.button(
-        label="👍 Like Current",
+        label="👍",
         style=discord.ButtonStyle.success,
         custom_id="music:like_current",
         row=2,
@@ -529,7 +529,7 @@ class MusicControlView(discord.ui.View):
         await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)
 
     @discord.ui.button(
-        label="👎 Dislike Current",
+        label="👎",
         style=discord.ButtonStyle.secondary,
         custom_id="music:dislike_current",
         row=2,

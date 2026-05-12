@@ -182,8 +182,11 @@ class MusicBot(commands.Bot):
         fresh = get_song(song["id"])
         if fresh:
             self.player.current_song = fresh
-        action = "liked" if is_like else "disliked"
-        return True, f"You {action} **{song['name']}** by **{song['artist']}**."
+        if is_like:
+            effect = "It will be suppressed until the next cycle reset."
+        else:
+            effect = "It will be bumped to max probability."
+        return True, f"{'👍' if is_like else '👎'} **{song['name']}** by **{song['artist']}**. {effect}"
 
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
@@ -422,8 +425,14 @@ async def cmd_now_playing(interaction: discord.Interaction) -> None:
     embed.add_field(name="Song", value=song["name"], inline=True)
     embed.add_field(name="Artist", value=song["artist"], inline=True)
     embed.add_field(name="Plays", value=str(song.get("times_played", 0)), inline=True)
-    embed.add_field(name="Likes", value=str(song.get("likes", 0)), inline=True)
-    embed.add_field(name="Dislikes", value=str(song.get("dislikes", 0)), inline=True)
+    vote = int(song.get("vote_score", 0))
+    if vote > 0:
+        vote_label = f"+{vote} 🔥 (boosted)"
+    elif vote < 0:
+        vote_label = f"{vote} 💤 (suppressed)"
+    else:
+        vote_label = "0"
+    embed.add_field(name="Vote score", value=vote_label, inline=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -462,14 +471,14 @@ async def cmd_play_dj_event(
         await interaction.response.send_message("❌ No DJ event clip available.", ephemeral=True)
 
 
-@bot.tree.command(name="like", description="Like the currently playing song (1 vote/hour).")
+@bot.tree.command(name="like", description="Like the current song — suppresses it until cycle reset (1 vote per song per hour).")
 async def cmd_like(interaction: discord.Interaction) -> None:
     ok, msg = await bot.submit_current_song_feedback(interaction, is_like=True)
     prefix = "👍" if ok else "❌"
     await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)
 
 
-@bot.tree.command(name="dislike", description="Dislike the currently playing song (1 vote/hour).")
+@bot.tree.command(name="dislike", description="Dislike the current song — boosts its probability (1 vote per song per hour).")
 async def cmd_dislike(interaction: discord.Interaction) -> None:
     ok, msg = await bot.submit_current_song_feedback(interaction, is_like=False)
     prefix = "👎" if ok else "❌"
