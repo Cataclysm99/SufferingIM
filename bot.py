@@ -72,7 +72,7 @@ def _controller_embed() -> discord.Embed:
             "Use buttons below to control playback.\n\n"
             "**Row 1 – Playback**: Play/Resume · Pause · Skip · Leave\n"
             "**Row 2 – Library**: Playlist · Full Library · Add Song · Delete Song\n"
-            "**Row 3 – Feedback**: Like Current · Dislike Current\n\n"
+            "**Row 3 – Feedback**: 👍 · 👎\n\n"
             "Intermissions: ads (~30 min) and DJ events (~60 min).\n"
             "DJ cycle: intro at start, hourly random events, outro around 6h, then restart."
         ),
@@ -182,11 +182,7 @@ class MusicBot(commands.Bot):
         fresh = get_song(song["id"])
         if fresh:
             self.player.current_song = fresh
-        if is_like:
-            effect = "Vote score decreased — if it goes negative the song is suppressed until the next cycle reset."
-        else:
-            effect = "Vote score increased — if it is positive the song gets maximum selection probability."
-        return True, f"{'👍' if is_like else '👎'} **{song['name']}** by **{song['artist']}**. {effect}"
+        return True, f"{'👍' if is_like else '👎'} Feedback received for **{song['name']}** by **{song['artist']}**."
 
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
@@ -425,14 +421,6 @@ async def cmd_now_playing(interaction: discord.Interaction) -> None:
     embed.add_field(name="Song", value=song["name"], inline=True)
     embed.add_field(name="Artist", value=song["artist"], inline=True)
     embed.add_field(name="Plays", value=str(song.get("times_played", 0)), inline=True)
-    vote = int(song.get("vote_score", 0))
-    if vote > 0:
-        vote_label = f"+{vote} 🔥 (boosted)"
-    elif vote < 0:
-        vote_label = f"{vote} 💤 (suppressed)"
-    else:
-        vote_label = "0"
-    embed.add_field(name="Vote score", value=vote_label, inline=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -471,14 +459,14 @@ async def cmd_play_dj_event(
         await interaction.response.send_message("❌ No DJ event clip available.", ephemeral=True)
 
 
-@bot.tree.command(name="like", description="Like the current song — suppresses it until cycle reset (1 vote per song per hour).")
+@bot.tree.command(name="like", description="Send a like for the current song.")
 async def cmd_like(interaction: discord.Interaction) -> None:
     ok, msg = await bot.submit_current_song_feedback(interaction, is_like=True)
     prefix = "👍" if ok else "❌"
     await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)
 
 
-@bot.tree.command(name="dislike", description="Dislike the current song — boosts its probability (1 vote per song per hour).")
+@bot.tree.command(name="dislike", description="Send a dislike for the current song.")
 async def cmd_dislike(interaction: discord.Interaction) -> None:
     ok, msg = await bot.submit_current_song_feedback(interaction, is_like=False)
     prefix = "👎" if ok else "❌"
