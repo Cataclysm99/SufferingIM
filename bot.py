@@ -182,7 +182,7 @@ class MusicBot(commands.Bot):
         fresh = get_song(song["id"])
         if fresh:
             self.player.current_song = fresh
-        return True, f"{'👍' if is_like else '👎'} Feedback received for **{song['name']}** by **{song['artist']}**."
+        return True, "Feedback received."
 
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
