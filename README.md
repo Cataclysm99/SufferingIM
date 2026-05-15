@@ -125,7 +125,7 @@ On every transition to next track:
 ## Commands (core)
 
 - `/controller` – post control panel
-- `/upload_song` – upload + register a song (Music Manager)
+- `/upload_song` – add media from attachment, YouTube link(s), or both; supports `target` Song/Ad (Music Manager)
 - `/songs`, `/songs_all`, `/search`
 - `/toggle_song`, `/toggle_song_id` (Music Manager)
 - `/delete_song_id` (Music Manager, reaction-confirmed)
@@ -149,4 +149,3 @@ Buttons mirror the same core actions.
 - Sunday/Monday branding settings:
   - `SUFFERING_BOT_NAME`, `HEAVEN_BOT_NAME`
   - optional avatar/banner paths
-

@@ -6,14 +6,18 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 
 import discord
+import yt_dlp
 from discord import app_commands
 from discord.ext import commands
 
 from broadcast import DAYS as DJ_DAYS, DJEventScheduler
 from config import (
+    ADS_DIR,
     ALLOWED_EXTENSIONS,
     CONTROLLER_CHANNEL_ID,
     DJ_EVENTS_DIR,
@@ -59,10 +63,21 @@ logging.basicConfig(
 )
 
 SONGS_DIR.mkdir(parents=True, exist_ok=True)
+ADS_DIR.mkdir(parents=True, exist_ok=True)
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
+
+_URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
+_YOUTUBE_HOSTS = {
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+    "www.youtu.be",
+}
 
 
 def _controller_embed() -> discord.Embed:
@@ -88,6 +103,65 @@ def _read_optional_bytes(path: str) -> bytes | None:
     if not p.is_file():
         return None
     return p.read_bytes()
+
+
+def _unique_path(directory: Path, filename: str) -> Path:
+    safe = Path(filename).name
+    base = Path(safe).stem or "audio"
+    ext = Path(safe).suffix.lower()
+    candidate = directory / f"{base}{ext}"
+    n = 1
+    while candidate.exists():
+        candidate = directory / f"{base}_{n}{ext}"
+        n += 1
+    return candidate
+
+
+def _extract_urls(text: str) -> list[str]:
+    return _URL_RE.findall(text or "")
+
+
+def _is_youtube_url(url: str) -> bool:
+    try:
+        host = urlparse(url).netloc.lower().strip()
+    except Exception:
+        return False
+    return host in _YOUTUBE_HOSTS
+
+
+def _infer_target(source: str | None, selected: str | None) -> str:
+    if selected in {"song", "ad"}:
+        return selected
+    if source:
+        m = re.search(r"\b(?:target|type|kind)\s*:\s*(song|ad)\b", source, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).lower()
+    return "song"
+
+
+def _download_youtube_audio(url: str, target_dir: Path) -> list[Path]:
+    before = {p.name for p in target_dir.iterdir() if p.is_file()}
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "noplaylist": False,
+        "quiet": True,
+        "no_warnings": True,
+        "restrictfilenames": True,
+        "outtmpl": str(target_dir / "%(title).200B-%(id)s.%(ext)s"),
+        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    added: list[Path] = []
+    for p in sorted(target_dir.iterdir()):
+        if not p.is_file():
+            continue
+        if p.name in before:
+            continue
+        if p.suffix.lower() not in ALLOWED_EXTENSIONS:
+            continue
+        added.append(p)
+    return added
 
 
 class MusicBot(commands.Bot):
@@ -235,17 +309,30 @@ async def cmd_controller(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(embed=_controller_embed(), view=MusicControlView())
 
 
-@bot.tree.command(name="upload_song", description="Upload an audio file and add it to the library.")
+@bot.tree.command(
+    name="upload_song",
+    description="Add media from attachment, YouTube link(s), or both.",
+)
 @app_commands.describe(
-    file="Audio file to upload",
-    name="Display name",
-    artist="Artist name",
+    source="Optional text with YouTube link(s). You can include kind:song or kind:ad.",
+    file="Optional audio file attachment",
+    target="Destination type (Song or Ad). Defaults to Song.",
+    name="Optional display name override for attached file song",
+    artist="Optional artist override for attached file song",
+)
+@app_commands.choices(
+    target=[
+        app_commands.Choice(name="Song", value="song"),
+        app_commands.Choice(name="Ad", value="ad"),
+    ]
 )
 async def cmd_upload_song(
     interaction: discord.Interaction,
-    file: discord.Attachment,
-    name: str,
-    artist: str,
+    source: str | None = None,
+    file: discord.Attachment | None = None,
+    target: app_commands.Choice[str] | None = None,
+    name: str | None = None,
+    artist: str | None = None,
 ) -> None:
     if not is_music_manager(interaction):
         await interaction.response.send_message(
@@ -253,22 +340,78 @@ async def cmd_upload_song(
         )
         return
 
-    ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-    if ext not in ALLOWED_EXTENSIONS:
+    raw_target = _infer_target(source, target.value if target else None)
+    target_dir = SONGS_DIR if raw_target == "song" else ADS_DIR
+    urls = _extract_urls(source or "")
+    youtube_urls = [u for u in urls if _is_youtube_url(u)]
+
+    if file is None and not youtube_urls:
         await interaction.response.send_message(
-            f"❌ Unsupported file type `{ext}`.\nAllowed: {', '.join(ALLOWED_EXTENSIONS)}",
+            "❌ Provide an attachment, a YouTube link, or both.",
             ephemeral=True,
         )
         return
 
+    if file is not None:
+        ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+        if ext not in ALLOWED_EXTENSIONS:
+            await interaction.response.send_message(
+                f"❌ Unsupported file type `{ext}`.\nAllowed: {', '.join(ALLOWED_EXTENSIONS)}",
+                ephemeral=True,
+            )
+            return
+
     await interaction.response.defer(ephemeral=True)
-    dest = SONGS_DIR / file.filename
-    await file.save(dest)
-    song_id = add_song(name, artist, file.filename, str(interaction.user.id))
-    await interaction.followup.send(
-        f"✅ Added **{name}** by **{artist}**.\nSong ID: `{song_id}`",
-        ephemeral=True,
-    )
+
+    added_song_ids: list[int] = []
+    added_song_names: list[str] = []
+    added_ad_files: list[str] = []
+    ignored_urls = [u for u in urls if u not in youtube_urls]
+    failed_urls: list[str] = []
+
+    for url in youtube_urls:
+        try:
+            downloaded = await asyncio.to_thread(_download_youtube_audio, url, target_dir)
+        except Exception as exc:
+            log.warning("yt-dlp download failed for %s: %s", url, exc)
+            failed_urls.append(url)
+            continue
+        for p in downloaded:
+            if raw_target == "song":
+                sid = add_song(p.stem, "YouTube", p.name, str(interaction.user.id))
+                added_song_ids.append(sid)
+                added_song_names.append(p.stem)
+            else:
+                added_ad_files.append(p.name)
+
+    if file is not None:
+        dest = _unique_path(target_dir, file.filename)
+        await file.save(dest)
+        if raw_target == "song":
+            display_name = (name or dest.stem).strip() or dest.stem
+            display_artist = (artist or "Unknown").strip() or "Unknown"
+            sid = add_song(display_name, display_artist, dest.name, str(interaction.user.id))
+            added_song_ids.append(sid)
+            added_song_names.append(display_name)
+        else:
+            added_ad_files.append(dest.name)
+
+    if raw_target == "ad" and (added_ad_files or youtube_urls):
+        sync_ads_from_disk()
+
+    lines: list[str] = []
+    if added_song_ids:
+        lines.append(f"✅ Added {len(added_song_ids)} song(s). IDs: `{', '.join(map(str, added_song_ids))}`")
+    if added_ad_files:
+        lines.append(f"✅ Added {len(added_ad_files)} ad file(s).")
+    if ignored_urls:
+        lines.append(f"⚠️ Ignored {len(ignored_urls)} non-YouTube URL(s).")
+    if failed_urls:
+        lines.append(f"⚠️ Failed to download {len(failed_urls)} YouTube URL(s).")
+    if not lines:
+        lines.append("❌ No media was added.")
+
+    await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
 @bot.tree.command(name="search", description="Search songs by name, artist, uploader, or id.")
