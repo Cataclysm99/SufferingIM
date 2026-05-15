@@ -197,7 +197,7 @@ def apply_song_feedback(song_id: int, user_id: int, is_like: bool) -> tuple[bool
             elapsed = now - float(row["voted_at"])
             if elapsed < 3600:
                 minutes = int((3600 - elapsed) // 60) + 1
-                return False, f"You already voted on this song. Try again in about {minutes} minute(s)."
+                return False, f"You've already given feedback for this song. Try again in about {minutes} minute(s)."
             conn.execute(
                 "UPDATE vote_cooldowns SET voted_at = ? WHERE user_id = ? AND song_id = ?",
                 (now, uid, song_id),
@@ -216,7 +216,7 @@ def apply_song_feedback(song_id: int, user_id: int, is_like: bool) -> tuple[bool
             (delta, song_id),
         )
         conn.commit()
-    return True, "Vote recorded."
+    return True, "Feedback received."
 
 
 def reset_song_vote_score(song_id: int) -> None:

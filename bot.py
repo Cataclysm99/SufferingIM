@@ -256,7 +256,7 @@ class MusicBot(commands.Bot):
         fresh = get_song(song["id"])
         if fresh:
             self.player.current_song = fresh
-        return True, "Feedback received."
+        return True, msg
 
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
@@ -431,7 +431,7 @@ async def cmd_search(
     if not results:
         await interaction.response.send_message("No matching songs found.", ephemeral=True)
         return
-    embed = _song_table_embed(results, title=f'🔎 Results: {field.name} = "{query}"')
+    embed = await _song_table_embed(results, title=f'🔎 Results: {field.name} = "{query}"', client=interaction.client, guild=interaction.guild)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -450,7 +450,7 @@ async def cmd_toggle_song(interaction: discord.Interaction, name: str) -> None:
         )
         return
     if len(matches) > 1:
-        embed = _song_table_embed(matches, title=f'🔎 Multiple songs named "{name}"')
+        embed = await _song_table_embed(matches, title=f'🔎 Multiple songs named "{name}"', client=interaction.client, guild=interaction.guild)
         embed.add_field(
             name="What to do",
             value="Use **`/toggle_song_id <id>`** with the ID shown above.",
@@ -515,13 +515,13 @@ async def cmd_delete_song_id(interaction: discord.Interaction, song_id: int) -> 
 
 @bot.tree.command(name="songs", description="Show active songs.")
 async def cmd_songs(interaction: discord.Interaction) -> None:
-    embed = _song_table_embed(get_all_songs())
+    embed = await _song_table_embed(get_all_songs(), client=interaction.client, guild=interaction.guild)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 @bot.tree.command(name="songs_all", description="Show all songs including deactivated.")
 async def cmd_songs_all(interaction: discord.Interaction) -> None:
-    embed = _song_table_embed(get_all_songs_admin(), title="🎵 Song Library (All)")
+    embed = await _song_table_embed(get_all_songs_admin(), title="🎵 Song Library (All)", client=interaction.client, guild=interaction.guild)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 

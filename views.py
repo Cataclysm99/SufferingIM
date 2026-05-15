@@ -138,11 +138,20 @@ async def _build_delete_confirm_message(
         f"Only <@{requester_id}> can confirm this action."
     )
 
-def _song_table_embed(songs: list[dict], title: str = "🎵 Song Library") -> discord.Embed:
+async def _song_table_embed(
+    songs: list[dict],
+    title: str = "🎵 Song Library",
+    *,
+    client: discord.Client | None = None,
+    guild: discord.Guild | None = None,
+) -> discord.Embed:
     """Build a nicely formatted embed table for the song library.
 
     When the list contains any deactivated songs the row's name field is
     prefixed with ``[inactive]`` so admins can see status at a glance.
+
+    When *client* is provided, "Added By" is resolved to a display name;
+    otherwise the raw user ID is shown.
     """
     embed = discord.Embed(title=title, colour=discord.Colour.blue())
 
@@ -161,8 +170,19 @@ def _song_table_embed(songs: list[dict], title: str = "🎵 Song Library") -> di
     )
     divider = "─" * (_COL_ID + _COL_NAME + _COL_ARTIST + _COL_ADDED_BY + 16)
 
+    # Resolve all "added by" display names concurrently.
+    added_by_ids = [str(s.get("added_by", "")) for s in songs]
+    if client:
+        display_names: list[str] = list(
+            await asyncio.gather(
+                *[_resolve_username(client, uid, guild) for uid in added_by_ids]
+            )
+        )
+    else:
+        display_names = added_by_ids
+
     rows = []
-    for s in songs:
+    for s, added_by_str in zip(songs, display_names):
         name_str = s["name"]
         if show_inactive_marker and not s.get("available", 1):
             name_str = f"[inactive] {name_str}"
@@ -172,7 +192,7 @@ def _song_table_embed(songs: list[dict], title: str = "🎵 Song Library") -> di
             f"{s['id']:<{_COL_ID}} "
             f"{name_str:<{_COL_NAME}} "
             f"{s['artist'][:_COL_ARTIST - 1]:<{_COL_ARTIST}} "
-            f"{str(s.get('added_by', ''))[:_COL_ADDED_BY - 1]:<{_COL_ADDED_BY}} "
+            f"{added_by_str[:_COL_ADDED_BY - 1]:<{_COL_ADDED_BY}} "
             f"{s['times_played']}"
         )
 
@@ -470,7 +490,7 @@ class MusicControlView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         songs = get_all_songs()
-        embed = _song_table_embed(songs)
+        embed = await _song_table_embed(songs, client=interaction.client, guild=interaction.guild)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(
@@ -483,7 +503,7 @@ class MusicControlView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         songs = get_all_songs_admin()
-        embed = _song_table_embed(songs, title="🎵 Song Library (All)")
+        embed = await _song_table_embed(songs, title="🎵 Song Library (All)", client=interaction.client, guild=interaction.guild)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(
