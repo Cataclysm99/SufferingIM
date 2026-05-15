@@ -446,16 +446,17 @@ async def cmd_toggle_song(interaction: discord.Interaction, name: str) -> None:
     matches = get_songs_by_name(name)
     if not matches:
         await interaction.response.send_message(
-            f"Sorry, there is no song named {name}.", ephemeral=True
+            f"Sorry, there is no song named **{name}**.", ephemeral=True
         )
         return
     if len(matches) > 1:
-        embed = _song_table_embed(matches, title="🔎 Multiple Matches")
-        await interaction.response.send_message(
-            f"Multiple songs named **{name}** were found. Use `/toggle_song_id`.",
-            embed=embed,
-            ephemeral=True,
+        embed = _song_table_embed(matches, title=f'🔎 Multiple songs named "{name}"')
+        embed.add_field(
+            name="What to do",
+            value="Use **`/toggle_song_id <id>`** with the ID shown above.",
+            inline=False,
         )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     song = matches[0]
     if song.get("available", 1):
@@ -477,7 +478,7 @@ async def cmd_toggle_song_id(interaction: discord.Interaction, song_id: int) -> 
     song = get_song(song_id)
     if not song:
         await interaction.response.send_message(
-            f"Sorry, there is no song with ID {song_id}.", ephemeral=True
+            f"Sorry, there is no song with ID **{song_id}**.", ephemeral=True
         )
         return
     if song.get("available", 1):
@@ -499,7 +500,7 @@ async def cmd_delete_song_id(interaction: discord.Interaction, song_id: int) -> 
     song = get_song(song_id)
     if not song:
         await interaction.response.send_message(
-            f"Sorry, there is no song with ID {song_id}.", ephemeral=True
+            f"Sorry, there is no song with ID **{song_id}**.", ephemeral=True
         )
         return
     msg_content = await _build_delete_confirm_message(

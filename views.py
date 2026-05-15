@@ -25,7 +25,7 @@ import asyncio
 
 import discord
 
-from config import MUSIC_MANAGER_ROLE_ID, SONGS_DIR
+from config import ALLOWED_EXTENSIONS, MUSIC_MANAGER_ROLE_ID, SONGS_DIR
 from database import (
     add_song,
     get_all_songs,
@@ -216,6 +216,15 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
             await interaction.response.send_message(
                 f"❌ `{self.filename.value}` was not found inside the `songs/` folder.\n"
                 "Upload the file first (via `/upload_song`) or check the filename.",
+                ephemeral=True,
+            )
+            return
+
+        ext = song_path.suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            await interaction.response.send_message(
+                f"❌ `{self.filename.value}` has an unsupported file type `{ext}`.\n"
+                f"Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
                 ephemeral=True,
             )
             return
