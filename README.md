@@ -125,6 +125,7 @@ On every transition to next track:
 ## Commands (core)
 
 - `/controller` – post control panel
+- `/help` – DM a quick tutorial and command list
 - `/upload_song` – add media from attachment, YouTube link(s), or both; supports `target` Song/Ad (Music Manager)
 - `/songs`, `/songs_all`, `/search`
 - `/toggle_song`, `/toggle_song_id` (Music Manager)

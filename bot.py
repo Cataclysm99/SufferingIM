@@ -88,11 +88,62 @@ def _controller_embed() -> discord.Embed:
             "**Row 1 – Playback**: Play/Resume · Pause · Skip · Leave\n"
             "**Row 2 – Library**: Playlist · Full Library · Add Song · Delete Song\n"
             "**Row 3 – Feedback**: 👍 · 👎\n\n"
+            "Need the command list? Use **`/help`** and I'll DM you a quick guide.\n"
             "Intermissions: ads (~30 min) and DJ events (~60 min).\n"
             "DJ cycle: intro at start, hourly random events, outro around 6h, then restart."
         ),
         colour=discord.Colour.purple(),
     )
+    return embed
+
+
+def _help_tutorial_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="🎧 SufferingFM Quick Start",
+        description="Mini guide for the controller buttons and slash commands.",
+        colour=discord.Colour.blurple(),
+    )
+    embed.add_field(
+        name="1) Start playback",
+        value=(
+            "Join a voice channel, then press **▶ Play / Resume** on the controller.\n"
+            "Use **⏸ Pause**, **⏭ Skip**, and **📞 Leave** as needed."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="2) Browse songs",
+        value=(
+            "Use **📋 Playlist** or **📚 Full Library** on the controller.\n"
+            "Slash command options: **`/songs`**, **`/songs_all`**, **`/search`**."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="3) Check the current track / send feedback",
+        value=(
+            "Use **`/now_playing`** to see the current song.\n"
+            "Send feedback with **👍 / 👎** buttons or **`/like`** / **`/dislike`**."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="4) Add music",
+        value=(
+            "Music Managers can use **`/upload_song`** for attachments or YouTube links.\n"
+            "The **➕ Add Song** button is for files already placed in the `songs/` folder."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="5) Manager tools",
+        value=(
+            "**`/toggle_song`**, **`/toggle_song_id`**, **`/delete_song_id`**,\n"
+            "**`/set_rigged_pool`**, **`/play_dj_event`**."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Some commands/buttons require the Music Manager role.")
     return embed
 
 
@@ -307,6 +358,23 @@ bot = MusicBot()
 @bot.tree.command(name="controller", description="Post the controller panel.")
 async def cmd_controller(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(embed=_controller_embed(), view=MusicControlView())
+
+
+@bot.tree.command(name="help", description="DM a quick tutorial and command list.")
+async def cmd_help(interaction: discord.Interaction) -> None:
+    try:
+        await interaction.user.send(embed=_help_tutorial_embed())
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "❌ I couldn't DM you. Please enable direct messages from server members and try again.",
+            ephemeral=True,
+        )
+        return
+
+    await interaction.response.send_message(
+        "📬 I sent you a quick tutorial and command list in DMs.",
+        ephemeral=True,
+    )
 
 
 @bot.tree.command(
