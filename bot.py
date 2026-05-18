@@ -131,7 +131,7 @@ def _help_tutorial_embed() -> discord.Embed:
         name="4) Add music",
         value=(
             "Music Managers can use **`/upload_song`** for attachments or YouTube links.\n"
-            "The **➕ Add Song** button is for files already placed in the `songs/` folder."
+            "The **➕ Add Song** button can add a song directly from a YouTube link."
         ),
         inline=False,
     )
@@ -199,7 +199,6 @@ def _download_youtube_audio(url: str, target_dir: Path) -> list[Path]:
         "no_warnings": True,
         "restrictfilenames": True,
         "outtmpl": str(target_dir / "%(title).200B-%(id)s.%(ext)s"),
-        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])

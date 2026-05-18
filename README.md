@@ -73,7 +73,7 @@ dj_events/
   sunday/
 ```
 
-All audio extensions in config are supported (`.mp3`, `.wav`, `.ogg`, `.flac`, `.m4a`, `.aac`, `.opus`).
+All audio extensions in config are supported (`.mp3`, `.wav`, `.ogg`, `.flac`, `.m4a`, `.aac`, `.opus`, `.webm`).
 
 ---
 

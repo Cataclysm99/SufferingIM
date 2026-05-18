@@ -9,7 +9,7 @@ MusicControlView
     Row 1 – library controls  : Song List  | Add Song | Delete Song
 
 AddSongModal
-    Modal form to register an audio file that already exists in songs/.
+    Modal form to download audio from a YouTube URL and register it.
     The uploader's Discord user ID is captured automatically.
 
 DeleteSongModal
@@ -22,8 +22,12 @@ DeleteSongModal
 from __future__ import annotations
 
 import asyncio
+import re
+from pathlib import Path
+from urllib.parse import urlparse
 
 import discord
+import yt_dlp
 
 from config import ALLOWED_EXTENSIONS, MUSIC_MANAGER_ROLE_ID, SONGS_DIR
 from database import (
@@ -44,6 +48,16 @@ CONTROLLER_SEARCH_LIMIT = 30
 # Reaction emojis for the two-step delete confirmation.
 REACT_DEACTIVATE = "✅"
 REACT_HARD_DELETE = "🗑️"
+
+_URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
+_YOUTUBE_HOSTS = {
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+    "www.youtu.be",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -206,22 +220,24 @@ async def _song_table_embed(
 # ---------------------------------------------------------------------------
 
 class AddSongModal(discord.ui.Modal, title="Add Song"):
-    """Collect song metadata and register the file in the database."""
+    """Collect a YouTube URL and register downloaded audio in the database."""
 
     song_name = discord.ui.TextInput(
-        label="Song Name",
-        placeholder="e.g. Bohemian Rhapsody",
+        label="Song Name (optional)",
+        placeholder="Defaults to downloaded title",
         max_length=100,
+        required=False,
     )
     artist = discord.ui.TextInput(
-        label="Artist",
-        placeholder="e.g. Queen",
+        label="Artist (optional)",
+        placeholder="Defaults to YouTube",
         max_length=100,
+        required=False,
     )
-    filename = discord.ui.TextInput(
-        label="Filename (must exist in songs/ folder)",
-        placeholder="e.g. bohemian_rhapsody.mp3",
-        max_length=255,
+    youtube_url = discord.ui.TextInput(
+        label="YouTube Link",
+        placeholder="https://www.youtube.com/watch?v=...",
+        max_length=500,
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -231,36 +247,69 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
             )
             return
 
-        song_path = SONGS_DIR / self.filename.value
-        if not song_path.exists():
+        url = _URL_RE.search(self.youtube_url.value or "")
+        if not url:
             await interaction.response.send_message(
-                f"❌ `{self.filename.value}` was not found inside the `songs/` folder.\n"
-                "Upload the file first (via `/upload_song`) or check the filename.",
+                "❌ Please provide a valid YouTube URL.",
                 ephemeral=True,
             )
             return
 
-        ext = song_path.suffix.lower()
-        if ext not in ALLOWED_EXTENSIONS:
+        parsed = urlparse(url.group(0))
+        if parsed.netloc.lower().strip() not in _YOUTUBE_HOSTS:
             await interaction.response.send_message(
-                f"❌ `{self.filename.value}` has an unsupported file type `{ext}`.\n"
-                f"Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
+                "❌ Only YouTube links are supported here.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            downloaded = await asyncio.to_thread(_download_youtube_audio, url.group(0), SONGS_DIR)
+        except Exception as exc:
+            await interaction.followup.send(f"❌ Could not download from YouTube: {exc}", ephemeral=True)
+            return
+
+        if not downloaded:
+            await interaction.followup.send(
+                f"❌ Downloaded file type is not supported.\nAllowed: {', '.join(ALLOWED_EXTENSIONS)}",
                 ephemeral=True,
             )
             return
 
         added_by = str(interaction.user.id)
-        song_id = add_song(
-            self.song_name.value,
-            self.artist.value,
-            self.filename.value,
-            added_by,
-        )
-        await interaction.response.send_message(
-            f"✅ **{self.song_name.value}** by **{self.artist.value}** added to the library.\n"
-            f"Song ID: `{song_id}`",
-            ephemeral=True,
-        )
+        artist = (self.artist.value or "").strip() or "YouTube"
+        custom_name = (self.song_name.value or "").strip()
+        lines: list[str] = []
+        for idx, track in enumerate(downloaded):
+            name = custom_name if idx == 0 and custom_name else track.stem
+            song_id = add_song(name, artist, track.name, added_by)
+            lines.append(f"✅ Added **{name}** (ID: `{song_id}`)")
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+
+
+def _download_youtube_audio(url: str, target_dir: Path) -> list[Path]:
+    before = {p.name for p in target_dir.iterdir() if p.is_file()}
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "restrictfilenames": True,
+        "outtmpl": str(target_dir / "%(title).200B-%(id)s.%(ext)s"),
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+    added: list[Path] = []
+    for p in sorted(target_dir.iterdir()):
+        if not p.is_file():
+            continue
+        if p.name in before:
+            continue
+        if p.suffix.lower() not in ALLOWED_EXTENSIONS:
+            continue
+        added.append(p)
+    return added
 
 
 class DeleteSongModal(discord.ui.Modal, title="Delete Song"):

@@ -85,4 +85,4 @@ FFMPEG_BEFORE_OPTIONS: str = "-reconnect 1 -reconnect_streamed 1 -reconnect_dela
 FFMPEG_OPTIONS: dict = {"options": "-vn"}
 
 # Allowed audio extensions for uploads
-ALLOWED_EXTENSIONS: tuple = (".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus")
+ALLOWED_EXTENSIONS: tuple = (".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus", ".webm")
