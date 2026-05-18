@@ -9,7 +9,7 @@ import random
 import shutil
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import discord
 
@@ -71,7 +71,6 @@ def _audio_source(path: Path) -> discord.FFmpegPCMAudio:
         **FFMPEG_OPTIONS,
     )
 
-from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from broadcast import DJEventScheduler
 
@@ -260,7 +259,7 @@ class MusicPlayer:
         if rigged_pool and random.randint(1, RIGGED_CHANCE) == 1:
             return random.choice(rigged_pool)
 
-        # Exclude songs whose vote_score went negative (received more likes than dislikes).
+        # Exclude songs whose vote_score is negative (more likes than dislikes received).
         # In SufferingFM semantics, popular (liked) songs are suppressed; disliked songs are boosted.
         selectable = [s for s in normal_songs if int(s.get("vote_score", 0)) >= 0]
 
