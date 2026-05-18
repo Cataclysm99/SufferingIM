@@ -259,7 +259,7 @@ class MusicPlayer:
         if rigged_pool and random.randint(1, RIGGED_CHANCE) == 1:
             return random.choice(rigged_pool)
 
-        # Exclude songs whose vote_score is negative (more likes than dislikes received).
+        # Exclude songs whose vote_score is negative.
         # In SufferingFM semantics, popular (liked) songs are suppressed; disliked songs are boosted.
         selectable = [s for s in normal_songs if int(s.get("vote_score", 0)) >= 0]
 
