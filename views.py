@@ -423,6 +423,92 @@ class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
 
 
 # ---------------------------------------------------------------------------
+# Paginated song list view
+# ---------------------------------------------------------------------------
+
+_SONGS_PER_PAGE = 20
+
+
+def _song_page_embed(songs: list[dict], page: int, total_pages: int) -> discord.Embed:
+    """Build a compact single-page embed for the paginated playlist.
+
+    Only ID, Name and Artist are shown (one song per line, no wrapping).
+    """
+    col_id = _COL_ID
+    col_name = _COL_NAME
+    col_artist = _COL_ARTIST
+
+    header = (
+        f"{'ID':<{col_id}} "
+        f"{'Name':<{col_name}} "
+        f"{'Artist':<{col_artist}}"
+    )
+    divider = "─" * (col_id + col_name + col_artist + 2)
+
+    rows = [
+        f"{s['id']:<{col_id}} "
+        f"{s['name'][:col_name]:<{col_name}} "
+        f"{s['artist'][:col_artist]:<{col_artist}}"
+        for s in songs
+    ]
+
+    body = "```\n" + "\n".join([header, divider, *rows]) + "\n```"
+    embed = discord.Embed(
+        title="🎵 Song Playlist",
+        description=body,
+        colour=discord.Colour.blue(),
+    )
+    embed.set_footer(text=f"Page {page}/{total_pages} • {len(songs)} song(s) on this page")
+    return embed
+
+
+class SongListView(discord.ui.View):
+    """Ephemeral paginated playlist viewer.
+
+    Presents songs 20 per page with Prev / Next navigation buttons.
+    Because this is always sent ephemerally its custom_ids do not need to be
+    globally stable — it has a 10-minute timeout so idle views expire cleanly.
+    """
+
+    def __init__(self, songs: list[dict]) -> None:
+        super().__init__(timeout=600)
+        self._songs = songs
+        self._page = 1
+        self._total_pages = max(1, -(-len(songs) // _SONGS_PER_PAGE))  # ceil division
+
+    def _current_page_songs(self) -> list[dict]:
+        start = (self._page - 1) * _SONGS_PER_PAGE
+        return self._songs[start : start + _SONGS_PER_PAGE]
+
+    def _build_embed(self) -> discord.Embed:
+        return _song_page_embed(
+            self._current_page_songs(), self._page, self._total_pages
+        )
+
+    def _update_buttons(self) -> None:
+        self.prev_button.disabled = self._page <= 1
+        self.next_button.disabled = self._page >= self._total_pages
+
+    @discord.ui.button(label="◀ Prev", style=discord.ButtonStyle.secondary, row=0)
+    async def prev_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if self._page > 1:
+            self._page -= 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+
+    @discord.ui.button(label="Next ▶", style=discord.ButtonStyle.secondary, row=0)
+    async def next_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if self._page < self._total_pages:
+            self._page += 1
+        self._update_buttons()
+        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+
+
+# ---------------------------------------------------------------------------
 # Persistent controller view
 # ---------------------------------------------------------------------------
 
@@ -467,7 +553,7 @@ class MusicControlView(discord.ui.View):
     # ------------------------------------------------------------------
 
     @discord.ui.button(
-        label="▶ Play / Resume",
+        label="▶ Play",
         style=discord.ButtonStyle.success,
         custom_id="music:play_resume",
         row=0,
@@ -584,8 +670,16 @@ class MusicControlView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         songs = get_all_songs()
-        embed = await _song_table_embed(songs, compact=True)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        if not songs:
+            await interaction.response.send_message(
+                "*No songs in the library yet.*", ephemeral=True
+            )
+            return
+        view = SongListView(songs)
+        view._update_buttons()
+        await interaction.response.send_message(
+            embed=view._build_embed(), view=view, ephemeral=True
+        )
 
     @discord.ui.button(
         label="➕ Add Song",

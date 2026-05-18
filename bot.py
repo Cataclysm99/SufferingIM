@@ -92,7 +92,7 @@ def _controller_embed(
         display = label_map.get(label.lower(), f"🎵 {label.title()}")
         embed.add_field(name="Now Playing", value=display, inline=False)
     else:
-        embed.description = "*Not currently playing. Use ▶ Play / Resume to start.*"
+        embed.description = "*Not currently playing. Use ▶ Play to start.*"
     return embed
 
 
