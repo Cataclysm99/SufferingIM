@@ -51,6 +51,7 @@ from views import (
     REACT_HARD_DELETE,
     MusicControlView,
     _build_delete_confirm_message,
+    _resolve_username,
     _song_table_embed,
     is_music_manager,
 )
@@ -68,20 +69,30 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
 
-def _controller_embed() -> discord.Embed:
-    embed = discord.Embed(
-        title="🎵 SufferingFM Controller",
-        description=(
-            "Use buttons below to control playback.\n\n"
-            "**Row 1 – Playback**: Play/Resume · Pause · Skip · Leave\n"
-            "**Row 2 – Library**: Playlist · Full Library · Add Song · Delete Song\n"
-            "**Row 3 – Feedback**: 👍 · 👎\n\n"
-            "Need the command list? Use **`/help`** and I'll DM you a quick guide.\n"
-            "Intermissions: ads (~30 min) and DJ events (~60 min).\n"
-            "DJ cycle: intro at start, hourly random events, outro around 6h, then restart."
-        ),
-        colour=discord.Colour.purple(),
-    )
+def _controller_embed(
+    song: dict | None = None,
+    label: str | None = None,
+    added_by: str | None = None,
+) -> discord.Embed:
+    """Return the controller embed, optionally showing the current track."""
+    embed = discord.Embed(title="🎵 SufferingFM", colour=discord.Colour.purple())
+    if song:
+        embed.add_field(name="🎵 Now Playing", value=f"**{song['name']}**", inline=True)
+        embed.add_field(name="Artist", value=song["artist"], inline=True)
+        if added_by:
+            embed.add_field(name="Added by", value=added_by, inline=True)
+    elif label:
+        label_map = {
+            "ad": "📢 Advertisement",
+            "dj intro": "🎤 DJ Intro",
+            "dj outro": "🎤 DJ Outro",
+            "dj event": "🎤 DJ Event",
+            "intermission": "📢 Intermission",
+        }
+        display = label_map.get(label.lower(), f"🎵 {label.title()}")
+        embed.add_field(name="Now Playing", value=display, inline=False)
+    else:
+        embed.description = "*Not currently playing. Use ▶ Play / Resume to start.*"
     return embed
 
 
@@ -102,8 +113,8 @@ def _help_tutorial_embed() -> discord.Embed:
     embed.add_field(
         name="2) Browse songs",
         value=(
-            "Use **📋 Playlist** or **📚 Full Library** on the controller.\n"
-            "Slash command options: **`/songs`**, **`/songs_all`**, **`/search`**."
+            "Use **📋 Playlist** on the controller for the active song list.\n"
+            "Slash commands: **`/songs`**, **`/songs_all`** (Manager), **`/search`**."
         ),
         inline=False,
     )
@@ -173,6 +184,7 @@ class MusicBot(commands.Bot):
         self.pending_deletes: dict[int, dict] = {}
         self._branding_mode: str | None = None
         self._branding_task: asyncio.Task | None = None
+        self.controller_message: discord.Message | None = None
 
     async def setup_hook(self) -> None:
         self.add_view(MusicControlView())
@@ -193,6 +205,7 @@ class MusicBot(commands.Bot):
         if self._branding_task is None or self._branding_task.done():
             self._branding_task = asyncio.create_task(self._branding_loop())
 
+        self.player.on_track_start = self.update_controller_now_playing
         await self._ensure_controller()
 
     async def _ensure_controller(self) -> None:
@@ -203,8 +216,10 @@ class MusicBot(commands.Bot):
             return
         async for msg in channel.history(limit=CONTROLLER_SEARCH_LIMIT):
             if msg.author == self.user and msg.components:
+                self.controller_message = msg
                 return
-        await channel.send(embed=_controller_embed(), view=MusicControlView())
+        msg = await channel.send(embed=_controller_embed(), view=MusicControlView())
+        self.controller_message = msg
         log.info("Controller posted in #%s", channel.name)
 
     async def _branding_loop(self) -> None:
@@ -259,6 +274,23 @@ class MusicBot(commands.Bot):
         if fresh:
             self.player.current_song = fresh
         return True, msg
+
+    async def update_controller_now_playing(
+        self, song: dict | None, label: str
+    ) -> None:
+        """Edit the tracked controller message to show the current track info."""
+        if self.controller_message is None:
+            return
+        guild = self.controller_message.guild
+        if song:
+            added_by = await _resolve_username(self, song.get("added_by", ""), guild)
+            embed = _controller_embed(song=song, added_by=added_by)
+        else:
+            embed = _controller_embed(label=label)
+        try:
+            await self.controller_message.edit(embed=embed)
+        except Exception as exc:
+            log.warning("Failed to update controller embed: %s", exc)
 
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
@@ -538,8 +570,13 @@ async def cmd_songs(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="songs_all", description="Show all songs including deactivated.")
+@bot.tree.command(name="songs_all", description="Show all songs including deactivated (Music Manager only).")
 async def cmd_songs_all(interaction: discord.Interaction) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role to view the full library.", ephemeral=True
+        )
+        return
     embed = await _song_table_embed(get_all_songs_admin(), title="🎵 Song Library (All)", client=interaction.client, guild=interaction.guild)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 

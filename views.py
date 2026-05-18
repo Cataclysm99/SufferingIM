@@ -38,10 +38,10 @@ from media_utils import download_youtube_audio, extract_urls, is_youtube_url
 log = logging.getLogger(__name__)
 
 # Column widths used in the song-table display.
-_COL_ID = 5
-_COL_NAME = 25
-_COL_ARTIST = 18
-_COL_ADDED_BY = 20
+_COL_ID = 4
+_COL_NAME = 20
+_COL_ARTIST = 15
+_COL_ADDED_BY = 14
 # Number of history messages to scan when searching for an existing controller.
 CONTROLLER_SEARCH_LIMIT = 30
 
@@ -147,14 +147,15 @@ async def _song_table_embed(
     *,
     client: discord.Client | None = None,
     guild: discord.Guild | None = None,
+    compact: bool = False,
 ) -> discord.Embed:
     """Build a nicely formatted embed table for the song library.
 
-    When the list contains any deactivated songs the row's name field is
-    prefixed with ``[inactive]`` so admins can see status at a glance.
+    When *compact* is True only ID, Name and Artist are shown (no "Added By"
+    or "Plays"), keeping each row to a single line for normal users.
 
-    When *client* is provided, "Added By" is resolved to a display name;
-    otherwise the raw user ID is shown.
+    When *compact* is False all columns are included and deactivated songs are
+    prefixed with ``[inactive]`` so admins can see status at a glance.
     """
     embed = discord.Embed(title=title, colour=discord.Colour.blue())
 
@@ -162,42 +163,67 @@ async def _song_table_embed(
         embed.description = "*No songs in the library yet.*"
         return embed
 
-    show_inactive_marker = any(not s.get("available", 1) for s in songs)
+    if compact:
+        col_id = _COL_ID
+        col_name = _COL_NAME
+        col_artist = _COL_ARTIST
 
-    header = (
-        f"{'ID':<{_COL_ID}} "
-        f"{'Name':<{_COL_NAME}} "
-        f"{'Artist':<{_COL_ARTIST}} "
-        f"{'Added By':<{_COL_ADDED_BY}} "
-        f"Plays"
-    )
-    divider = "─" * (_COL_ID + _COL_NAME + _COL_ARTIST + _COL_ADDED_BY + 16)
+        header = (
+            f"{'ID':<{col_id}} "
+            f"{'Name':<{col_name}} "
+            f"{'Artist':<{col_artist}}"
+        )
+        divider = "─" * (col_id + col_name + col_artist + 2)
 
-    # Resolve all "added by" display names concurrently.
-    added_by_ids = [str(s.get("added_by", "")) for s in songs]
-    if client:
-        display_names: list[str] = list(
-            await asyncio.gather(
-                *[_resolve_username(client, uid, guild) for uid in added_by_ids]
+        rows: list[str] = []
+        for s in songs:
+            rows.append(
+                f"{s['id']:<{col_id}} "
+                f"{s['name'][:col_name - 1]:<{col_name}} "
+                f"{s['artist'][:col_artist - 1]:<{col_artist}}"
             )
-        )
     else:
-        display_names = added_by_ids
+        col_id = _COL_ID
+        col_name = _COL_NAME
+        col_artist = _COL_ARTIST
+        col_added_by = _COL_ADDED_BY
 
-    rows: list[str] = []
-    for s, added_by_str in zip(songs, display_names):
-        name_str = s["name"]
-        if show_inactive_marker and not s.get("available", 1):
-            name_str = f"[inactive] {name_str}"
-        name_str = name_str[: _COL_NAME - 1]
+        show_inactive_marker = any(not s.get("available", 1) for s in songs)
 
-        rows.append(
-            f"{s['id']:<{_COL_ID}} "
-            f"{name_str:<{_COL_NAME}} "
-            f"{s['artist'][:_COL_ARTIST - 1]:<{_COL_ARTIST}} "
-            f"{added_by_str[:_COL_ADDED_BY - 1]:<{_COL_ADDED_BY}} "
-            f"{s['times_played']}"
+        header = (
+            f"{'ID':<{col_id}} "
+            f"{'Name':<{col_name}} "
+            f"{'Artist':<{col_artist}} "
+            f"{'Added By':<{col_added_by}} "
+            f"Plays"
         )
+        divider = "─" * (col_id + col_name + col_artist + col_added_by + 18)
+
+        # Resolve all "added by" display names concurrently.
+        added_by_ids = [str(s.get("added_by", "")) for s in songs]
+        if client:
+            display_names: list[str] = list(
+                await asyncio.gather(
+                    *[_resolve_username(client, uid, guild) for uid in added_by_ids]
+                )
+            )
+        else:
+            display_names = added_by_ids
+
+        rows = []
+        for s, added_by_str in zip(songs, display_names):
+            name_str = s["name"]
+            if show_inactive_marker and not s.get("available", 1):
+                name_str = f"[inactive] {name_str}"
+            name_str = name_str[: col_name - 1]
+
+            rows.append(
+                f"{s['id']:<{col_id}} "
+                f"{name_str:<{col_name}} "
+                f"{s['artist'][:col_artist - 1]:<{col_artist}} "
+                f"{added_by_str[:col_added_by - 1]:<{col_added_by}} "
+                f"{s['times_played']}"
+            )
 
     # Keep embed description within Discord's 4096-character limit.
     max_desc_len = 4096
@@ -558,20 +584,7 @@ class MusicControlView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         songs = get_all_songs()
-        embed = await _song_table_embed(songs, client=interaction.client, guild=interaction.guild)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @discord.ui.button(
-        label="📚 Full Library",
-        style=discord.ButtonStyle.secondary,
-        custom_id="music:full_library",
-        row=1,
-    )
-    async def full_library(
-        self, interaction: discord.Interaction, button: discord.ui.Button
-    ) -> None:
-        songs = get_all_songs_admin()
-        embed = await _song_table_embed(songs, title="🎵 Song Library (All)", client=interaction.client, guild=interaction.guild)
+        embed = await _song_table_embed(songs, compact=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(

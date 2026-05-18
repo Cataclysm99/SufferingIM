@@ -9,7 +9,7 @@ import random
 import shutil
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import discord
 
@@ -98,10 +98,15 @@ class MusicPlayer:
         self._last_ad_at: float = self._cycle_started_at
         self._last_dj_event_at: float = self._cycle_started_at
         self._intro_pending: bool = True
+        self.on_track_start: Optional[Callable] = None
 
-    # ------------------------------------------------------------------
-    # Configuration
-    # ------------------------------------------------------------------
+    async def _notify_track_start(self, song: Optional[dict], label: str) -> None:
+        """Fire on_track_start callback if registered, silently ignoring errors."""
+        if self.on_track_start is not None:
+            try:
+                await self.on_track_start(song, label)
+            except Exception as exc:
+                log.warning("on_track_start callback error: %s", exc)
 
     def set_rigged_songs(self, song_ids: list[int]) -> None:
         self._rigged_song_ids = [sid for sid in song_ids if sid > 0]
@@ -184,6 +189,7 @@ class MusicPlayer:
                 self._last_ad_at = time.monotonic()
             elif label.startswith("dj"):
                 self._last_dj_event_at = time.monotonic()
+            await self._notify_track_start(None, label)
             return True
         return False
 
@@ -195,6 +201,7 @@ class MusicPlayer:
         self._intro_pending = False
         if clip and self._play_audio_file(clip, "dj intro"):
             self._last_dj_event_at = time.monotonic()
+            await self._notify_track_start(None, "dj intro")
             return True
         return False
 
@@ -207,6 +214,7 @@ class MusicPlayer:
         self._reset_cycle()
         reset_negative_vote_scores()
         if clip and self._play_audio_file(clip, "dj outro"):
+            await self._notify_track_start(None, "dj outro")
             return True
         return False
 
@@ -216,6 +224,7 @@ class MusicPlayer:
         clip = self.dj_events.random_hourly_clip(day)
         if clip and self._play_audio_file(clip, "dj event"):
             self._last_dj_event_at = time.monotonic()
+            await self._notify_track_start(None, "dj event")
             return True
         return False
 
@@ -227,6 +236,7 @@ class MusicPlayer:
         if self._play_audio_file(path, "ad"):
             self._last_ad_at = time.monotonic()
             increment_ad_play_count(ad["id"])
+            await self._notify_track_start(None, "ad")
             return True
         return False
 
@@ -339,6 +349,7 @@ class MusicPlayer:
             _audio_source(song_path),
             after=_after,
         )
+        await self._notify_track_start(fresh, "song")
         return fresh
 
     def pause(self) -> bool:
