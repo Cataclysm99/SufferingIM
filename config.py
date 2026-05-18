@@ -81,8 +81,11 @@ SUFFERING_BANNER_PATH: str = os.getenv("SUFFERING_BANNER_PATH", "")
 HEAVEN_BANNER_PATH: str = os.getenv("HEAVEN_BANNER_PATH", "")
 
 # ── FFmpeg options ────────────────────────────────────────────────────────────
-FFMPEG_BEFORE_OPTIONS: str = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
-FFMPEG_OPTIONS: dict = {"options": "-vn"}
+FFMPEG_BEFORE_OPTIONS: str = (
+    "-nostdin -thread_queue_size 1024 "
+    "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+)
+FFMPEG_OPTIONS: dict = {"options": "-vn -loglevel warning -af aresample=async=1"}
 FFMPEG_EXECUTABLE: str = os.getenv("FFMPEG_EXECUTABLE", "").strip()
 
 # Allowed audio extensions for uploads

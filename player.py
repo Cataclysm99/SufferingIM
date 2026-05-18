@@ -18,6 +18,7 @@ from config import (
     ADS_DIR,
     DJ_CYCLE_HOURS,
     DJ_EVENT_INTERVAL_MINUTES,
+    FFMPEG_BEFORE_OPTIONS,
     FFMPEG_EXECUTABLE,
     FFMPEG_OPTIONS,
     RIGGED_CHANCE,
@@ -71,10 +72,13 @@ _FFMPEG_EXECUTABLE = _resolve_ffmpeg_executable()
 
 
 def _audio_source(path: Path) -> discord.FFmpegPCMAudio:
+    ffmpeg_kwargs = dict(FFMPEG_OPTIONS)
+    if FFMPEG_BEFORE_OPTIONS.strip():
+        ffmpeg_kwargs["before_options"] = FFMPEG_BEFORE_OPTIONS
     return discord.FFmpegPCMAudio(
         str(path),
         executable=_FFMPEG_EXECUTABLE,
-        **FFMPEG_OPTIONS,
+        **ffmpeg_kwargs,
     )
 
 if TYPE_CHECKING:

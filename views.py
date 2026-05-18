@@ -567,6 +567,7 @@ class MusicControlView(discord.ui.View):
         if player.is_paused():
             player.resume()
             await interaction.response.send_message("▶ Resumed.", ephemeral=True)
+            await interaction.client.refresh_controller_status()  # type: ignore[attr-defined]
             return
 
         # Already playing — nothing to do.
@@ -614,6 +615,7 @@ class MusicControlView(discord.ui.View):
         player = interaction.client.player  # type: ignore[attr-defined]
         if player.pause():
             await interaction.response.send_message("⏸ Paused.", ephemeral=True)
+            await interaction.client.refresh_controller_status()  # type: ignore[attr-defined]
         else:
             await interaction.response.send_message(
                 "❌ Nothing is playing right now.", ephemeral=True
@@ -652,6 +654,7 @@ class MusicControlView(discord.ui.View):
             )
             return
         await player.disconnect()
+        await interaction.client.clear_controller_now_playing()  # type: ignore[attr-defined]
         await interaction.response.send_message(
             "📞 Left the voice channel.", ephemeral=True
         )

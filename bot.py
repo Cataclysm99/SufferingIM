@@ -73,14 +73,18 @@ def _controller_embed(
     song: dict | None = None,
     label: str | None = None,
     added_by: str | None = None,
+    is_paused: bool = False,
 ) -> discord.Embed:
     """Return the controller embed, optionally showing the current track."""
     embed = discord.Embed(title="🎵 SufferingFM", colour=discord.Colour.purple())
+    status = "⏸ Paused" if is_paused else "▶ Playing"
     if song:
-        embed.add_field(name="🎵 Now Playing", value=f"**{song['name']}**", inline=True)
-        embed.add_field(name="Artist", value=song["artist"], inline=True)
-        if added_by:
-            embed.add_field(name="Added by", value=added_by, inline=True)
+        embed.add_field(
+            name=status,
+            value=f"**{song['name']}** — **{song['artist']}**",
+            inline=False,
+        )
+        embed.add_field(name="Added by", value=added_by or "Unknown", inline=False)
     elif label:
         label_map = {
             "ad": "📢 Advertisement",
@@ -90,7 +94,7 @@ def _controller_embed(
             "intermission": "📢 Intermission",
         }
         display = label_map.get(label.lower(), f"🎵 {label.title()}")
-        embed.add_field(name="Now Playing", value=display, inline=False)
+        embed.add_field(name=status, value=display, inline=False)
     else:
         embed.description = "*Not currently playing. Use ▶ Play to start.*"
     return embed
@@ -105,7 +109,7 @@ def _help_tutorial_embed() -> discord.Embed:
     embed.add_field(
         name="1) Start playback",
         value=(
-            "Join a voice channel, then press **▶ Play / Resume** on the controller.\n"
+            "Join a voice channel, then press **▶ Play** on the controller.\n"
             "Use **⏸ Pause**, **⏭ Skip**, and **📞 Leave** as needed."
         ),
         inline=False,
@@ -185,6 +189,8 @@ class MusicBot(commands.Bot):
         self._branding_mode: str | None = None
         self._branding_task: asyncio.Task | None = None
         self.controller_message: discord.Message | None = None
+        self._controller_song: dict | None = None
+        self._controller_label: str | None = None
 
     async def setup_hook(self) -> None:
         self.add_view(MusicControlView())
@@ -275,22 +281,48 @@ class MusicBot(commands.Bot):
             self.player.current_song = fresh
         return True, msg
 
-    async def update_controller_now_playing(
-        self, song: dict | None, label: str
-    ) -> None:
-        """Edit the tracked controller message to show the current track info."""
+    async def refresh_controller_status(self) -> None:
+        """Refresh the tracked controller message using cached current-track state."""
         if self.controller_message is None:
             return
         guild = self.controller_message.guild
-        if song:
-            added_by = await _resolve_username(self, song.get("added_by", ""), guild)
-            embed = _controller_embed(song=song, added_by=added_by)
+        if self._controller_song:
+            added_by = await _resolve_username(
+                self, self._controller_song.get("added_by", ""), guild
+            )
+            embed = _controller_embed(
+                song=self._controller_song,
+                added_by=added_by,
+                is_paused=self.player.is_paused(),
+            )
+        elif self._controller_label:
+            embed = _controller_embed(
+                label=self._controller_label,
+                is_paused=self.player.is_paused(),
+            )
         else:
-            embed = _controller_embed(label=label)
+            embed = _controller_embed()
         try:
             await self.controller_message.edit(embed=embed)
         except Exception as exc:
             log.warning("Failed to update controller embed: %s", exc)
+
+    async def clear_controller_now_playing(self) -> None:
+        self._controller_song = None
+        self._controller_label = None
+        await self.refresh_controller_status()
+
+    async def update_controller_now_playing(
+        self, song: dict | None, label: str
+    ) -> None:
+        """Update cached current-track state and refresh controller embed."""
+        if song:
+            self._controller_song = song
+            self._controller_label = None
+        else:
+            self._controller_song = None
+            self._controller_label = label
+        await self.refresh_controller_status()
 
     async def on_raw_reaction_add(
         self, payload: discord.RawReactionActionEvent
