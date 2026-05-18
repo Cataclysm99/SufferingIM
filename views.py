@@ -22,12 +22,8 @@ DeleteSongModal
 from __future__ import annotations
 
 import asyncio
-import re
-from pathlib import Path
-from urllib.parse import urlparse
 
 import discord
-import yt_dlp
 
 from config import ALLOWED_EXTENSIONS, MUSIC_MANAGER_ROLE_ID, SONGS_DIR
 from database import (
@@ -36,6 +32,7 @@ from database import (
     get_all_songs_admin,
     get_songs_by_name,
 )
+from media_utils import download_youtube_audio, extract_urls, is_youtube_url
 
 # Column widths used in the song-table display.
 _COL_ID = 5
@@ -48,17 +45,6 @@ CONTROLLER_SEARCH_LIMIT = 30
 # Reaction emojis for the two-step delete confirmation.
 REACT_DEACTIVATE = "✅"
 REACT_HARD_DELETE = "🗑️"
-
-_URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
-_YOUTUBE_HOSTS = {
-    "youtube.com",
-    "www.youtube.com",
-    "m.youtube.com",
-    "music.youtube.com",
-    "youtu.be",
-    "www.youtu.be",
-}
-
 
 # ---------------------------------------------------------------------------
 # Permission helper
@@ -247,16 +233,16 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
             )
             return
 
-        url = _URL_RE.search(self.youtube_url.value or "")
-        if not url:
+        urls = extract_urls(self.youtube_url.value or "")
+        if not urls:
             await interaction.response.send_message(
                 "❌ Please provide a valid YouTube URL.",
                 ephemeral=True,
             )
             return
 
-        parsed = urlparse(url.group(0))
-        if parsed.netloc.lower().strip() not in _YOUTUBE_HOSTS:
+        youtube_url = urls[0]
+        if not is_youtube_url(youtube_url):
             await interaction.response.send_message(
                 "❌ Only YouTube links are supported here.",
                 ephemeral=True,
@@ -265,7 +251,7 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
 
         await interaction.response.defer(ephemeral=True)
         try:
-            downloaded = await asyncio.to_thread(_download_youtube_audio, url.group(0), SONGS_DIR)
+            downloaded = await asyncio.to_thread(download_youtube_audio, youtube_url, SONGS_DIR, True)
         except Exception as exc:
             await interaction.followup.send(f"❌ Could not download from YouTube: {exc}", ephemeral=True)
             return
@@ -286,30 +272,6 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
             song_id = add_song(name, artist, track.name, added_by)
             lines.append(f"✅ Added **{name}** (ID: `{song_id}`)")
         await interaction.followup.send("\n".join(lines), ephemeral=True)
-
-
-def _download_youtube_audio(url: str, target_dir: Path) -> list[Path]:
-    before = {p.name for p in target_dir.iterdir() if p.is_file()}
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "noplaylist": True,
-        "quiet": True,
-        "no_warnings": True,
-        "restrictfilenames": True,
-        "outtmpl": str(target_dir / "%(title).200B-%(id)s.%(ext)s"),
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-    added: list[Path] = []
-    for p in sorted(target_dir.iterdir()):
-        if not p.is_file():
-            continue
-        if p.name in before:
-            continue
-        if p.suffix.lower() not in ALLOWED_EXTENSIONS:
-            continue
-        added.append(p)
-    return added
 
 
 class DeleteSongModal(discord.ui.Modal, title="Delete Song"):

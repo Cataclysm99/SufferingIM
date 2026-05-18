@@ -8,10 +8,8 @@ import datetime
 import logging
 import re
 from pathlib import Path
-from urllib.parse import urlparse
 
 import discord
-import yt_dlp
 from discord import app_commands
 from discord.ext import commands
 
@@ -45,6 +43,7 @@ from database import (
     search_songs,
     sync_ads_from_disk,
 )
+from media_utils import download_youtube_audio, extract_urls, is_youtube_url
 from player import MusicPlayer
 from views import (
     CONTROLLER_SEARCH_LIMIT,
@@ -68,17 +67,6 @@ ADS_DIR.mkdir(parents=True, exist_ok=True)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
-
-_URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
-_YOUTUBE_HOSTS = {
-    "youtube.com",
-    "www.youtube.com",
-    "m.youtube.com",
-    "music.youtube.com",
-    "youtu.be",
-    "www.youtu.be",
-}
-
 
 def _controller_embed() -> discord.Embed:
     embed = discord.Embed(
@@ -168,18 +156,6 @@ def _unique_path(directory: Path, filename: str) -> Path:
     return candidate
 
 
-def _extract_urls(text: str) -> list[str]:
-    return _URL_RE.findall(text or "")
-
-
-def _is_youtube_url(url: str) -> bool:
-    try:
-        host = urlparse(url).netloc.lower().strip()
-    except Exception:
-        return False
-    return host in _YOUTUBE_HOSTS
-
-
 def _infer_target(source: str | None, selected: str | None) -> str:
     if selected in {"song", "ad"}:
         return selected
@@ -188,30 +164,6 @@ def _infer_target(source: str | None, selected: str | None) -> str:
         if m:
             return m.group(1).lower()
     return "song"
-
-
-def _download_youtube_audio(url: str, target_dir: Path) -> list[Path]:
-    before = {p.name for p in target_dir.iterdir() if p.is_file()}
-    ydl_opts = {
-        "format": "bestaudio/best",
-        "noplaylist": False,
-        "quiet": True,
-        "no_warnings": True,
-        "restrictfilenames": True,
-        "outtmpl": str(target_dir / "%(title).200B-%(id)s.%(ext)s"),
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-    added: list[Path] = []
-    for p in sorted(target_dir.iterdir()):
-        if not p.is_file():
-            continue
-        if p.name in before:
-            continue
-        if p.suffix.lower() not in ALLOWED_EXTENSIONS:
-            continue
-        added.append(p)
-    return added
 
 
 class MusicBot(commands.Bot):
@@ -409,8 +361,8 @@ async def cmd_upload_song(
 
     raw_target = _infer_target(source, target.value if target else None)
     target_dir = SONGS_DIR if raw_target == "song" else ADS_DIR
-    urls = _extract_urls(source or "")
-    youtube_urls = [u for u in urls if _is_youtube_url(u)]
+    urls = extract_urls(source or "")
+    youtube_urls = [u for u in urls if is_youtube_url(u)]
 
     if file is None and not youtube_urls:
         await interaction.response.send_message(
@@ -438,7 +390,7 @@ async def cmd_upload_song(
 
     for url in youtube_urls:
         try:
-            downloaded = await asyncio.to_thread(_download_youtube_audio, url, target_dir)
+            downloaded = await asyncio.to_thread(download_youtube_audio, url, target_dir, False)
         except Exception as exc:
             log.warning("yt-dlp download failed for %s: %s", url, exc)
             failed_urls.append(url)
