@@ -22,6 +22,7 @@ DeleteSongModal
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import discord
 
@@ -33,6 +34,8 @@ from database import (
     get_songs_by_name,
 )
 from media_utils import download_youtube_audio, extract_urls, is_youtube_url
+
+log = logging.getLogger(__name__)
 
 # Column widths used in the song-table display.
 _COL_ID = 5
@@ -378,6 +381,29 @@ class MusicControlView(discord.ui.View):
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[discord.ui.View],
+    ) -> None:
+        log.error(
+            "Unhandled controller view error (item=%s user_id=%s guild_id=%s)",
+            getattr(item, "custom_id", None),
+            getattr(interaction.user, "id", None),
+            getattr(interaction.guild, "id", None),
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        msg = "❌ Something went wrong while handling that button. Please try again."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except Exception:
+            # Do not surface a second error if Discord no longer accepts responses.
+            return
 
     # ------------------------------------------------------------------
     # Row 0 – playback
