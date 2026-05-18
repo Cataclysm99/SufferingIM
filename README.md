@@ -54,7 +54,12 @@ cp .env.example .env
 python bot.py
 ```
 
-Also install FFmpeg and ensure it is on PATH.
+FFmpeg resolution order at runtime:
+- `FFMPEG_EXECUTABLE` from `.env` (if set)
+- system `ffmpeg` on PATH
+- bundled binary from `imageio-ffmpeg` dependency
+
+If you already have ffmpeg installed globally, no extra setup is required.
 
 ---
 

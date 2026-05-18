@@ -83,6 +83,7 @@ HEAVEN_BANNER_PATH: str = os.getenv("HEAVEN_BANNER_PATH", "")
 # ── FFmpeg options ────────────────────────────────────────────────────────────
 FFMPEG_BEFORE_OPTIONS: str = "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
 FFMPEG_OPTIONS: dict = {"options": "-vn"}
+FFMPEG_EXECUTABLE: str = os.getenv("FFMPEG_EXECUTABLE", "").strip()
 
 # Allowed audio extensions for uploads
 ALLOWED_EXTENSIONS: tuple = (".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus", ".webm")

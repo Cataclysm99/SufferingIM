@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import shutil
 import time
 from pathlib import Path
 from typing import Optional
@@ -17,6 +18,7 @@ from config import (
     ADS_DIR,
     DJ_CYCLE_HOURS,
     DJ_EVENT_INTERVAL_MINUTES,
+    FFMPEG_EXECUTABLE,
     FFMPEG_OPTIONS,
     RIGGED_CHANCE,
     SONGS_DIR,
@@ -33,6 +35,41 @@ from database import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _resolve_ffmpeg_executable() -> str:
+    configured = FFMPEG_EXECUTABLE.strip()
+    if configured:
+        if Path(configured).exists() or shutil.which(configured):
+            return configured
+        log.warning("Configured FFMPEG_EXECUTABLE not found: %s", configured)
+
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        return system_ffmpeg
+
+    try:
+        import imageio_ffmpeg
+
+        bundled = imageio_ffmpeg.get_ffmpeg_exe()
+        if bundled:
+            log.info("Using bundled ffmpeg executable from imageio-ffmpeg.")
+            return bundled
+    except Exception:
+        pass
+
+    return "ffmpeg"
+
+
+_FFMPEG_EXECUTABLE = _resolve_ffmpeg_executable()
+
+
+def _audio_source(path: Path) -> discord.FFmpegPCMAudio:
+    return discord.FFmpegPCMAudio(
+        str(path),
+        executable=_FFMPEG_EXECUTABLE,
+        **FFMPEG_OPTIONS,
+    )
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -125,7 +162,7 @@ class MusicPlayer:
             asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop)
 
         self.voice_client.play(
-            discord.FFmpegPCMAudio(str(path), **FFMPEG_OPTIONS),
+            _audio_source(path),
             after=_after,
         )
         log.info("Playing %s: %s", label, path.name)
@@ -294,7 +331,7 @@ class MusicPlayer:
             asyncio.run_coroutine_threadsafe(self.play_next(), self.bot.loop)
 
         self.voice_client.play(
-            discord.FFmpegPCMAudio(str(song_path), **FFMPEG_OPTIONS),
+            _audio_source(song_path),
             after=_after,
         )
         return fresh
