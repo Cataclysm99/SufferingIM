@@ -45,7 +45,9 @@ def _resolve_ffmpeg_executable() -> str:
                 return configured
         except (OSError, ValueError):
             log.warning("Configured FFMPEG_EXECUTABLE has invalid path syntax: %s", configured)
-        log.warning("Configured FFMPEG_EXECUTABLE not found: %s", configured)
+            configured = ""
+        if configured:
+            log.warning("Configured FFMPEG_EXECUTABLE not found: %s", configured)
 
     system_ffmpeg = shutil.which("ffmpeg")
     if system_ffmpeg:
