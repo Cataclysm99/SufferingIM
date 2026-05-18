@@ -184,7 +184,7 @@ async def _song_table_embed(
     else:
         display_names = added_by_ids
 
-    rows = []
+    rows: list[str] = []
     for s, added_by_str in zip(songs, display_names):
         name_str = s["name"]
         if show_inactive_marker and not s.get("available", 1):
@@ -199,8 +199,39 @@ async def _song_table_embed(
             f"{s['times_played']}"
         )
 
-    embed.description = "```\n" + "\n".join([header, divider, *rows]) + "\n```"
-    embed.set_footer(text=f"{len(songs)} song(s) total")
+    # Keep embed description within Discord's 4096-character limit.
+    max_desc_len = 4096
+    shown_rows: list[str] = []
+    for row in rows:
+        candidate = "```\n" + "\n".join([header, divider, *shown_rows, row]) + "\n```"
+        if len(candidate) > max_desc_len:
+            break
+        shown_rows.append(row)
+
+    hidden_count = len(rows) - len(shown_rows)
+    suffix_line = f"... ({hidden_count} more song(s) not shown)"
+    if hidden_count:
+        while True:
+            lines = [header, divider, *shown_rows, suffix_line]
+            candidate = "```\n" + "\n".join(lines) + "\n```"
+            if len(candidate) <= max_desc_len:
+                break
+            if not shown_rows:
+                # Extremely defensive fallback; header+divider+suffix should fit.
+                lines = [header, divider]
+                candidate = "```\n" + "\n".join(lines) + "\n```"
+                break
+            shown_rows.pop()
+
+    final_lines = [header, divider, *shown_rows]
+    if hidden_count:
+        final_lines.append(suffix_line)
+
+    embed.description = "```\n" + "\n".join(final_lines) + "\n```"
+    if hidden_count:
+        embed.set_footer(text=f"{len(songs)} song(s) total • showing {len(shown_rows)}")
+    else:
+        embed.set_footer(text=f"{len(songs)} song(s) total")
     return embed
 
 
