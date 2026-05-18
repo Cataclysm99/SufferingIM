@@ -179,8 +179,8 @@ async def _song_table_embed(
         for s in songs:
             rows.append(
                 f"{s['id']:<{col_id}} "
-                f"{s['name'][:col_name - 1]:<{col_name}} "
-                f"{s['artist'][:col_artist - 1]:<{col_artist}}"
+                f"{s['name'][:col_name]:<{col_name}} "
+                f"{s['artist'][:col_artist]:<{col_artist}}"
             )
     else:
         col_id = _COL_ID
@@ -215,13 +215,13 @@ async def _song_table_embed(
             name_str = s["name"]
             if show_inactive_marker and not s.get("available", 1):
                 name_str = f"[inactive] {name_str}"
-            name_str = name_str[: col_name - 1]
+            name_str = name_str[:col_name]
 
             rows.append(
                 f"{s['id']:<{col_id}} "
                 f"{name_str:<{col_name}} "
-                f"{s['artist'][:col_artist - 1]:<{col_artist}} "
-                f"{added_by_str[:col_added_by - 1]:<{col_added_by}} "
+                f"{s['artist'][:col_artist]:<{col_artist}} "
+                f"{added_by_str[:col_added_by]:<{col_added_by}} "
                 f"{s['times_played']}"
             )
 

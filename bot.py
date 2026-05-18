@@ -566,7 +566,7 @@ async def cmd_delete_song_id(interaction: discord.Interaction, song_id: int) -> 
 
 @bot.tree.command(name="songs", description="Show active songs.")
 async def cmd_songs(interaction: discord.Interaction) -> None:
-    embed = await _song_table_embed(get_all_songs(), client=interaction.client, guild=interaction.guild)
+    embed = await _song_table_embed(get_all_songs(), compact=True)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
