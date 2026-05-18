@@ -40,8 +40,11 @@ log = logging.getLogger(__name__)
 def _resolve_ffmpeg_executable() -> str:
     configured = FFMPEG_EXECUTABLE.strip()
     if configured:
-        if Path(configured).exists() or shutil.which(configured):
-            return configured
+        try:
+            if Path(configured).exists() or shutil.which(configured):
+                return configured
+        except (OSError, ValueError):
+            log.warning("Configured FFMPEG_EXECUTABLE has invalid path syntax: %s", configured)
         log.warning("Configured FFMPEG_EXECUTABLE not found: %s", configured)
 
     system_ffmpeg = shutil.which("ffmpeg")
