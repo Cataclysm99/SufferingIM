@@ -270,7 +270,7 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
 
     song_name = discord.ui.TextInput(
         label="Song Name (optional)",
-        placeholder="Defaults to downloaded title",
+        placeholder="Overrides title for 1st track only; leave blank for playlists",
         max_length=100,
         required=False,
     )
@@ -281,8 +281,8 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
         required=False,
     )
     youtube_url = discord.ui.TextInput(
-        label="YouTube Link",
-        placeholder="https://www.youtube.com/watch?v=...",
+        label="YouTube Link (video or playlist)",
+        placeholder="https://www.youtube.com/watch?v=... or playlist?list=...",
         max_length=500,
     )
 
@@ -311,7 +311,7 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
 
         await interaction.response.defer(ephemeral=True)
         try:
-            downloaded = await asyncio.to_thread(download_youtube_audio, youtube_url, SONGS_DIR, True)
+            downloaded = await asyncio.to_thread(download_youtube_audio, youtube_url, SONGS_DIR, False)
         except Exception as exc:
             await interaction.followup.send(f"❌ Could not download from YouTube: {exc}", ephemeral=True)
             return
