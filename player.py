@@ -72,11 +72,17 @@ _FFMPEG_EXECUTABLE = _resolve_ffmpeg_executable()
 
 
 def _audio_source(path: Path) -> discord.FFmpegPCMAudio:
+    source = str(path)
     ffmpeg_kwargs = dict(FFMPEG_OPTIONS)
-    if FFMPEG_BEFORE_OPTIONS.strip():
+    # Reconnect flags in before_options are for network streams and can break
+    # local file playback by causing ffmpeg to exit immediately.
+    is_stream_source = source.startswith(
+        ("http://", "https://", "rtmp://", "rtsp://", "mms://")
+    )
+    if is_stream_source and FFMPEG_BEFORE_OPTIONS.strip():
         ffmpeg_kwargs["before_options"] = FFMPEG_BEFORE_OPTIONS
     return discord.FFmpegPCMAudio(
-        str(path),
+        source,
         executable=_FFMPEG_EXECUTABLE,
         **ffmpeg_kwargs,
     )
