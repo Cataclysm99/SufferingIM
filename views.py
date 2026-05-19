@@ -524,6 +524,7 @@ class MusicControlView(discord.ui.View):
 
     def __init__(self) -> None:
         super().__init__(timeout=None)
+        self._play_resume_lock = asyncio.Lock()
 
     async def on_error(
         self,
@@ -562,46 +563,60 @@ class MusicControlView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         player = interaction.client.player  # type: ignore[attr-defined]
+        async with self._play_resume_lock:
+            # If paused, just resume — no voice channel join needed.
+            if player.is_paused():
+                player.resume()
+                await interaction.response.send_message("▶ Resumed.", ephemeral=True)
+                await interaction.client.refresh_controller_status()  # type: ignore[attr-defined]
+                return
 
-        # If paused, just resume — no voice channel join needed.
-        if player.is_paused():
-            player.resume()
-            await interaction.response.send_message("▶ Resumed.", ephemeral=True)
-            await interaction.client.refresh_controller_status()  # type: ignore[attr-defined]
-            return
+            # Already playing — nothing to do.
+            if player.is_playing():
+                await interaction.response.send_message(
+                    "▶ Music is already playing.", ephemeral=True
+                )
+                return
 
-        # Already playing — nothing to do.
-        if player.is_playing():
-            await interaction.response.send_message(
-                "▶ Music is already playing.", ephemeral=True
-            )
-            return
+            # Not active — need to join a voice channel.
+            if not interaction.user.voice:  # type: ignore[union-attr]
+                await interaction.response.send_message(
+                    "❌ You must be in a voice channel first!", ephemeral=True
+                )
+                return
 
-        # Not active — need to join a voice channel.
-        if not interaction.user.voice:  # type: ignore[union-attr]
-            await interaction.response.send_message(
-                "❌ You must be in a voice channel first!", ephemeral=True
-            )
-            return
+            voice_channel = interaction.user.voice.channel  # type: ignore[union-attr]
+            try:
+                await player.connect(voice_channel)
+            except TimeoutError:
+                await interaction.response.send_message(
+                    "❌ Timed out joining voice. Please press Play again.",
+                    ephemeral=True,
+                )
+                return
+            except discord.ClientException:
+                await interaction.response.send_message(
+                    "❌ Could not join voice right now. Please try again.",
+                    ephemeral=True,
+                )
+                return
 
-        voice_channel = interaction.user.voice.channel  # type: ignore[union-attr]
-        await player.connect(voice_channel)
-        await interaction.response.defer(ephemeral=True)
-        song = await player.play_next()
+            await interaction.response.defer(ephemeral=True)
+            song = await player.play_next()
 
-        if song:
-            await interaction.followup.send(
-                f"🎵 Now playing: **{song['name']}** by **{song['artist']}**",
-                ephemeral=True,
-            )
-        elif player.is_playing():
-            # An intermission clip (ad/DJ) started instead of a regular song.
-            await interaction.followup.send("▶ Playback started.", ephemeral=True)
-        else:
-            await interaction.followup.send(
-                "❌ The song library is empty. Add songs with **Add Song**.",
-                ephemeral=True,
-            )
+            if song:
+                await interaction.followup.send(
+                    f"🎵 Now playing: **{song['name']}** by **{song['artist']}**",
+                    ephemeral=True,
+                )
+            elif player.is_playing():
+                # An intermission clip (ad/DJ) started instead of a regular song.
+                await interaction.followup.send("▶ Playback started.", ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    "❌ The song library is empty. Add songs with **Add Song**.",
+                    ephemeral=True,
+                )
 
     @discord.ui.button(
         label="⏸ Pause",

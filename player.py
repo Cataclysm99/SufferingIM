@@ -128,24 +128,35 @@ class MusicPlayer:
 
     async def connect(self, channel: discord.VoiceChannel) -> None:
         guild_voice = discord.utils.get(self.bot.voice_clients, guild=channel.guild)
-        if guild_voice and guild_voice.is_connected():
-            self.voice_client = guild_voice
-            if guild_voice.channel != channel:
-                await guild_voice.move_to(channel)
-        elif self.voice_client and self.voice_client.is_connected():
-            if self.voice_client.channel != channel:
-                await self.voice_client.move_to(channel)
-        else:
-            try:
-                self.voice_client = await channel.connect()
-            except discord.ClientException:
-                guild_voice = discord.utils.get(self.bot.voice_clients, guild=channel.guild)
-                if guild_voice and guild_voice.is_connected():
-                    self.voice_client = guild_voice
-                    if guild_voice.channel != channel:
-                        await guild_voice.move_to(channel)
-                else:
-                    raise
+        try:
+            if guild_voice and guild_voice.is_connected():
+                self.voice_client = guild_voice
+                if guild_voice.channel != channel:
+                    await guild_voice.move_to(channel)
+            elif self.voice_client and self.voice_client.is_connected():
+                if self.voice_client.channel != channel:
+                    await self.voice_client.move_to(channel)
+            else:
+                try:
+                    self.voice_client = await channel.connect()
+                except discord.ClientException:
+                    guild_voice = discord.utils.get(self.bot.voice_clients, guild=channel.guild)
+                    if guild_voice and guild_voice.is_connected():
+                        self.voice_client = guild_voice
+                        if guild_voice.channel != channel:
+                            await guild_voice.move_to(channel)
+                    else:
+                        raise
+        except TimeoutError:
+            stale_voice = discord.utils.get(self.bot.voice_clients, guild=channel.guild)
+            if stale_voice and not stale_voice.is_connected():
+                try:
+                    await stale_voice.disconnect(force=True)
+                except Exception:
+                    pass
+            if self.voice_client and not self.voice_client.is_connected():
+                self.voice_client = None
+            raise
         self._reset_cycle()
 
     async def disconnect(self) -> None:
