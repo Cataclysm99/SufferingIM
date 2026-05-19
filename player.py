@@ -127,10 +127,25 @@ class MusicPlayer:
     # ------------------------------------------------------------------
 
     async def connect(self, channel: discord.VoiceChannel) -> None:
-        if self.voice_client and self.voice_client.is_connected():
-            await self.voice_client.move_to(channel)
+        guild_voice = discord.utils.get(self.bot.voice_clients, guild=channel.guild)
+        if guild_voice and guild_voice.is_connected():
+            self.voice_client = guild_voice
+            if guild_voice.channel != channel:
+                await guild_voice.move_to(channel)
+        elif self.voice_client and self.voice_client.is_connected():
+            if self.voice_client.channel != channel:
+                await self.voice_client.move_to(channel)
         else:
-            self.voice_client = await channel.connect()
+            try:
+                self.voice_client = await channel.connect()
+            except discord.ClientException:
+                guild_voice = discord.utils.get(self.bot.voice_clients, guild=channel.guild)
+                if guild_voice and guild_voice.is_connected():
+                    self.voice_client = guild_voice
+                    if guild_voice.channel != channel:
+                        await guild_voice.move_to(channel)
+                else:
+                    raise
         self._reset_cycle()
 
     async def disconnect(self) -> None:
