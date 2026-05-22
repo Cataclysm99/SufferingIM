@@ -6,7 +6,7 @@ Discord music bot with:
 - ad intermissions (~30 minutes)
 - DJ events (~60 minutes) with intro/outro 6-hour cycle
 - persistent controller buttons + slash commands
-- Sunday `HeavenFM` branding / Monday `SufferingFM` branding
+- Default `CollectorIM` branding, with Sunday `HeavenIN` / Monday `SufferFML` day-cycle branding
 
 ---
 
