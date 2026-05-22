@@ -272,7 +272,7 @@ class MusicBot(commands.Bot):
             target = "collector"
         else:
             # Monday=0, Sunday=6; Sunday triggers heaven mode.
-            weekday = datetime.datetime.now(datetime.UTC).weekday()
+            weekday = datetime.datetime.now(datetime.timezone.utc).weekday()
             target = "heaven" if weekday == 6 else "suffering"
         if target == self._branding_mode:
             return
