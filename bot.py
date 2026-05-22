@@ -7,6 +7,7 @@ import asyncio
 import datetime
 import json
 import logging
+import random
 import re
 import secrets
 import string
@@ -77,6 +78,15 @@ ADS_DIR.mkdir(parents=True, exist_ok=True)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.voice_states = True
+
+_SUFFERING_LINES: tuple[str, ...] = (
+    "💀 | || || |_",
+    "🛒 Hey you, you're finally awake.",
+    "🎁 https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "🗣️ They don't know me son.",
+    "🧠 The numbers, Mason, what do they mean?",
+    "📺 This episode is called: suffering.",
+)
 
 def _controller_embed(
     song: dict | None = None,
@@ -217,6 +227,7 @@ class MusicBot(commands.Bot):
         self._controller_label: str | None = None
         self._purge_password: str | None = None
         self._purge_password_expiry: float = 0.0
+        self._startup_state_announcement_sent: bool = False
 
     async def setup_hook(self) -> None:
         self.add_view(MusicControlView())
@@ -242,6 +253,9 @@ class MusicBot(commands.Bot):
 
         self.player.on_track_start = self.update_controller_now_playing
         await self._ensure_controller()
+        if not self._startup_state_announcement_sent:
+            await self.announce_state(channel=None)
+            self._startup_state_announcement_sent = True
 
     async def _ensure_controller(self) -> None:
         if not CONTROLLER_CHANNEL_ID:
@@ -378,6 +392,30 @@ class MusicBot(commands.Bot):
                 is_paused=self.player.is_paused(),
             )
         return _controller_embed(title=self._current_brand_name())
+
+    def _state_key(self) -> str:
+        if self._persona_mode == "forced_heaven":
+            return "heaven"
+        if self._persona_mode == "collector":
+            return "collector"
+        weekday = datetime.datetime.now(datetime.timezone.utc).weekday()
+        return "heaven" if weekday == 6 else "suffering"
+
+    def _state_announcement(self) -> str:
+        key = self._state_key()
+        if key == "collector":
+            return "🕶️ The Collector has come to collect."
+        if key == "heaven":
+            return "✨ Heaven's gates have been thrown open."
+        return random.choice(_SUFFERING_LINES)
+
+    async def announce_state(self, channel: discord.abc.Messageable | None) -> None:
+        target_channel = channel
+        if target_channel is None:
+            target_channel = self.controller_message.channel if self.controller_message else None
+        if target_channel is None:
+            return
+        await target_channel.send(self._state_announcement())
 
     async def submit_current_song_feedback(
         self, interaction: discord.Interaction, is_like: bool
@@ -841,10 +879,7 @@ async def cmd_pardon(interaction: discord.Interaction) -> None:
     bot._save_controller_state()
     await bot._apply_branding_for_day()
     await bot.refresh_controller_status()
-    await interaction.response.send_message(
-        "🕶️ Entered shady collection mode (Playlist/Add/Disable only).",
-        ephemeral=True,
-    )
+    await interaction.response.send_message(bot._state_announcement())
 
 
 @bot.tree.command(name="damn", description="Switch to full mode with default day-based persona.")
@@ -859,10 +894,7 @@ async def cmd_damn(interaction: discord.Interaction) -> None:
     bot._save_controller_state()
     await bot._apply_branding_for_day()
     await bot.refresh_controller_status()
-    await interaction.response.send_message(
-        "🔥 Full mode enabled. Default day-based persona restored.",
-        ephemeral=True,
-    )
+    await interaction.response.send_message(bot._state_announcement())
 
 
 @bot.tree.command(name="save", description="Switch to full mode and force Heaven persona.")
@@ -877,10 +909,7 @@ async def cmd_save(interaction: discord.Interaction) -> None:
     bot._save_controller_state()
     await bot._apply_branding_for_day()
     await bot.refresh_controller_status()
-    await interaction.response.send_message(
-        "✨ Full mode enabled. Heaven persona forced until `/damn` is used.",
-        ephemeral=True,
-    )
+    await interaction.response.send_message(bot._state_announcement())
 
 
 class PurgeSongsConfirmModal(discord.ui.Modal, title="Confirm Full Song Purge"):
