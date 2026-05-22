@@ -73,12 +73,15 @@ DJ_EVENTS_DIR: Path = BASE_DIR / "dj_events"
 DB_PATH: str = str(BASE_DIR / "songs.db")
 
 # Optional branding assets for day-based theme swap.
-SUFFERING_BOT_NAME: str = os.getenv("SUFFERING_BOT_NAME", "SufferingFM")
-HEAVEN_BOT_NAME: str = os.getenv("HEAVEN_BOT_NAME", "HeavenFM")
-SUFFERING_AVATAR_PATH: str = os.getenv("SUFFERING_AVATAR_PATH", "")
-HEAVEN_AVATAR_PATH: str = os.getenv("HEAVEN_AVATAR_PATH", "")
+COLLECTOR_BOT_NAME: str = os.getenv("COLLECTOR_BOT_NAME", "CollectorIM")
+SUFFERING_BOT_NAME: str = os.getenv("SUFFERING_BOT_NAME", "SufferFML")
+HEAVEN_BOT_NAME: str = os.getenv("HEAVEN_BOT_NAME", "HeavenIN")
+COLLECTOR_AVATAR_PATH: str = os.getenv("COLLECTOR_AVATAR_PATH", str(BASE_DIR / "profiles" / "collector.jpg"))
+SUFFERING_AVATAR_PATH: str = os.getenv("SUFFERING_AVATAR_PATH", str(BASE_DIR / "profiles" / "suffer.jpg"))
+HEAVEN_AVATAR_PATH: str = os.getenv("HEAVEN_AVATAR_PATH", str(BASE_DIR / "profiles" / "heaven.jpg"))
 SUFFERING_BANNER_PATH: str = os.getenv("SUFFERING_BANNER_PATH", "")
 HEAVEN_BANNER_PATH: str = os.getenv("HEAVEN_BANNER_PATH", "")
+CONTROLLER_STATE_PATH: Path = BASE_DIR / "controller_state.json"
 
 # ── FFmpeg options ────────────────────────────────────────────────────────────
 FFMPEG_BEFORE_OPTIONS: str = (

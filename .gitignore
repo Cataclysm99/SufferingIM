@@ -230,4 +230,5 @@ dj_events/*
 !dj_events/*/.gitkeep
 profiles/*
 !profiles/.gitkeep
+controller_state.json
 __pycache__/
