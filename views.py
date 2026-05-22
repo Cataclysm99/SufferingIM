@@ -31,6 +31,7 @@ from database import (
     get_all_songs,
     get_all_songs_admin,
     get_disabled_song_filenames,
+    get_song,
     hard_delete_song,
     get_songs_by_name,
 )
@@ -277,7 +278,7 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
     )
     artist = discord.ui.TextInput(
         label="Artist (optional)",
-        placeholder="Defaults to YouTube",
+        placeholder="Defaults to playlist name for playlists, or 'YouTube'",
         max_length=100,
         required=False,
     )
@@ -306,7 +307,7 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
 
         await interaction.response.defer(ephemeral=True)
         try:
-            downloaded = await asyncio.to_thread(download_youtube_audio, youtube_url, SONGS_DIR, False)
+            downloaded, playlist_title = await asyncio.to_thread(download_youtube_audio, youtube_url, SONGS_DIR, False)
         except Exception as exc:
             await interaction.followup.send(f"❌ Could not download from YouTube: {exc}", ephemeral=True)
             return
@@ -321,7 +322,8 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
         added_by = str(interaction.user.id)
         is_manager = is_music_manager(interaction)
         disabled_filenames = get_disabled_song_filenames()
-        artist = (self.artist.value or "").strip() or "YouTube"
+        artist_input = (self.artist.value or "").strip()
+        artist = artist_input or playlist_title or "YouTube"
         custom_name = (self.song_name.value or "").strip()
         lines: list[str] = []
         blocked_lines: list[str] = []
@@ -492,6 +494,83 @@ class DisableSongModal(discord.ui.Modal, title="Disable Song"):
         deactivate_song(song["id"])
         await interaction.response.send_message(
             f"⛔ Disabled **{song['name']}** by **{song['artist']}** (ID: `{song['id']}`).",
+            ephemeral=True,
+        )
+
+
+class DeleteSongByIdModal(discord.ui.Modal, title="Delete / Disable Song by ID"):
+    """Disable or fully delete a song by its numeric ID.
+
+    Used by the Collector (shady) controller so managers can act on a specific
+    song without being blocked by truncated name matching.
+    """
+
+    song_id = discord.ui.TextInput(
+        label="Song ID",
+        placeholder="Enter the numeric ID shown in Playlist view",
+        max_length=10,
+    )
+    hard_delete = discord.ui.TextInput(
+        label="Delete completely? (Y/N)",
+        placeholder="N = disable only, Y = remove DB entry + file",
+        max_length=3,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not is_music_manager(interaction):
+            await interaction.response.send_message(
+                "❌ You need the **Music Manager** role to delete songs.", ephemeral=True
+            )
+            return
+
+        try:
+            sid = int(self.song_id.value.strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "❌ Song ID must be a number.", ephemeral=True
+            )
+            return
+
+        song = get_song(sid)
+        if not song:
+            await interaction.response.send_message(
+                f"Sorry, there is no song with ID **{sid}**.", ephemeral=True
+            )
+            return
+
+        raw_choice = (self.hard_delete.value or "").strip().lower()
+        if raw_choice not in {"y", "yes", "n", "no"}:
+            await interaction.response.send_message(
+                "❌ Enter **Y** to fully delete the song or **N** to disable it.",
+                ephemeral=True,
+            )
+            return
+        should_hard_delete = raw_choice in {"y", "yes"}
+
+        if should_hard_delete:
+            hard_delete_song(song["id"])
+            song_path = SONGS_DIR / song["filename"]
+            if song_path.exists():
+                song_path.unlink()
+            await interaction.response.send_message(
+                f"🗑️ Permanently deleted **{song['name']}** (ID: `{song['id']}`) by **{song['artist']}**.",
+                ephemeral=True,
+            )
+            return
+
+        if not song.get("available", 1):
+            await interaction.response.send_message(
+                f"⛔ **{song['name']}** (ID: `{song['id']}`) is already disabled.",
+                ephemeral=True,
+            )
+            return
+
+        deactivate_song(song["id"])
+        await interaction.response.send_message(
+            (
+                f"⛔ Disabled **{song['name']}** (ID: `{song['id']}`) by **{song['artist']}**.\n"
+                "Use `/toggle_song_id` to re-enable it."
+            ),
             ephemeral=True,
         )
 
@@ -887,4 +966,4 @@ class ShadyControlView(discord.ui.View):
                 "❌ You need the **Music Manager** role to disable songs.", ephemeral=True
             )
             return
-        await interaction.response.send_modal(DisableSongModal())
+        await interaction.response.send_modal(DeleteSongByIdModal())

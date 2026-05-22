@@ -40,7 +40,13 @@ def download_youtube_audio(
     url: str,
     target_dir: Path,
     noplaylist: bool = False,
-) -> list[Path]:
+) -> tuple[list[Path], str | None]:
+    """Download audio from a YouTube URL.
+
+    Returns a tuple of ``(downloaded_paths, playlist_title)``.  *playlist_title*
+    is the YouTube playlist name when the URL points to a playlist, otherwise
+    ``None``.
+    """
     before = {p.name for p in target_dir.iterdir() if p.is_file()}
     ydl_opts = {
         "format": "bestaudio/best",
@@ -50,8 +56,11 @@ def download_youtube_audio(
         "restrictfilenames": True,
         "outtmpl": str(target_dir / "%(title).200B-%(id)s.%(ext)s"),
     }
+    playlist_title: str | None = None
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+        info = ydl.extract_info(url)
+        if isinstance(info, dict) and info.get("_type") == "playlist":
+            playlist_title = info.get("title") or None
 
     added: list[Path] = []
     for p in sorted(target_dir.iterdir()):
@@ -62,4 +71,4 @@ def download_youtube_audio(
         if p.suffix.lower() not in ALLOWED_EXTENSIONS:
             continue
         added.append(p)
-    return added
+    return added, playlist_title

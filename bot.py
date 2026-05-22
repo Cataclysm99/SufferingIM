@@ -8,6 +8,9 @@ import datetime
 import json
 import logging
 import re
+import secrets
+import string
+import time
 from pathlib import Path
 
 import discord
@@ -44,6 +47,7 @@ from database import (
     get_songs_by_name,
     hard_delete_song,
     init_db,
+    purge_all_songs,
     search_songs,
     sync_ads_from_disk,
 )
@@ -211,6 +215,8 @@ class MusicBot(commands.Bot):
         self.controller_message: discord.Message | None = None
         self._controller_song: dict | None = None
         self._controller_label: str | None = None
+        self._purge_password: str | None = None
+        self._purge_password_expiry: float = 0.0
 
     async def setup_hook(self) -> None:
         self.add_view(MusicControlView())
@@ -571,14 +577,15 @@ async def cmd_upload_song(
 
     for url in youtube_urls:
         try:
-            downloaded = await asyncio.to_thread(download_youtube_audio, url, target_dir, False)
+            downloaded, playlist_title = await asyncio.to_thread(download_youtube_audio, url, target_dir, False)
         except Exception as exc:
             log.warning("yt-dlp download failed for %s: %s", url, exc)
             failed_urls.append(url)
             continue
         for p in downloaded:
             if raw_target == "song":
-                sid = add_song(p.stem, "YouTube", p.name, str(interaction.user.id))
+                dl_artist = playlist_title or "YouTube"
+                sid = add_song(p.stem, dl_artist, p.name, str(interaction.user.id))
                 added_song_ids.append(sid)
                 added_song_names.append(p.stem)
             else:
@@ -874,6 +881,81 @@ async def cmd_save(interaction: discord.Interaction) -> None:
         "✨ Full mode enabled. Heaven persona forced until `/damn` is used.",
         ephemeral=True,
     )
+
+
+class PurgeSongsConfirmModal(discord.ui.Modal, title="Confirm Full Song Purge"):
+    """Require the one-time terminal password before wiping the song library."""
+
+    password = discord.ui.TextInput(
+        label="Terminal confirmation password",
+        placeholder="Check the bot terminal output for the password",
+        max_length=20,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        client = interaction.client  # type: ignore[attr-defined]
+        if not client._purge_password or time.time() > client._purge_password_expiry:
+            await interaction.response.send_message(
+                "❌ The purge session has expired. Run `/purge_songs` again.",
+                ephemeral=True,
+            )
+            return
+        if self.password.value.strip() != client._purge_password:
+            await interaction.response.send_message(
+                "❌ Incorrect password. Purge aborted.",
+                ephemeral=True,
+            )
+            return
+
+        # Consume the password immediately so it cannot be reused.
+        client._purge_password = None
+        client._purge_password_expiry = 0.0
+
+        await interaction.response.defer(ephemeral=True)
+        deleted = purge_all_songs()
+        deleted_files = 0
+        for p in SONGS_DIR.iterdir():
+            if p.is_file():
+                try:
+                    p.unlink()
+                    deleted_files += 1
+                except Exception as exc:
+                    log.warning("Could not delete file %s during purge: %s", p, exc)
+
+        log.warning(
+            "PURGE executed by user %s: %d DB records deleted, %d files removed.",
+            interaction.user.id, len(deleted), deleted_files,
+        )
+        await interaction.followup.send(
+            f"🗑️ Purged **{len(deleted)}** song(s) from the database and removed **{deleted_files}** file(s).",
+            ephemeral=True,
+        )
+
+
+@bot.tree.command(
+    name="purge_songs",
+    description="[DANGER] Wipe ALL songs from the database and disk (requires terminal password).",
+)
+async def cmd_purge_songs(interaction: discord.Interaction) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role.", ephemeral=True
+        )
+        return
+
+    alphabet = string.ascii_letters + string.digits
+    password = "".join(secrets.choice(alphabet) for _ in range(10))
+    bot._purge_password = password
+    bot._purge_password_expiry = time.time() + 300  # 5-minute window
+
+    print("\n" + "=" * 60, flush=True)
+    # Intentional: the one-time password is shown only in the terminal so that
+    # only someone with physical/remote server access can authorise the purge.
+    print(f"[PURGE CONFIRM] One-time password: {password}", flush=True)  # noqa: S106
+    print("[PURGE CONFIRM] Password expires in 5 minutes.", flush=True)
+    print("=" * 60 + "\n", flush=True)
+
+    await interaction.response.send_modal(PurgeSongsConfirmModal())
 
 
 if __name__ == "__main__":

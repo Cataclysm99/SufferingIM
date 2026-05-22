@@ -166,6 +166,15 @@ def hard_delete_song(song_id: int) -> Optional[dict]:
     return dict(row)
 
 
+def purge_all_songs() -> list[dict]:
+    """Delete every song record from the database. Returns the deleted records."""
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT * FROM songs").fetchall()
+        conn.execute("DELETE FROM songs")
+        conn.commit()
+    return [dict(r) for r in rows]
+
+
 def increment_play_count(song_id: int) -> None:
     with _get_conn() as conn:
         conn.execute(
