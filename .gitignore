@@ -228,4 +228,6 @@ dj_events/*
 !dj_events/.gitkeep
 !dj_events/*/
 !dj_events/*/.gitkeep
+profiles/*
+!profiles/.gitkeep
 __pycache__/
