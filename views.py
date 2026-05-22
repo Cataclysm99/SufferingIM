@@ -13,11 +13,9 @@ AddSongModal
     The uploader's Discord user ID is captured automatically.
 
 DeleteSongModal
-    Two-step delete by song name.
-    Step 1 – modal: user enters song name.
-    Step 2 – bot posts a non-ephemeral confirmation in the channel with
-             ✅ (deactivate, keep file) and 🗑️ (hard-delete + remove file)
-             reactions.  on_raw_reaction_add in bot.py handles the action.
+    Single-step delete/disable by song name.
+    The modal asks for the song name plus a Y/N choice for whether the song
+    should be fully removed or only disabled.
 """
 from __future__ import annotations
 
@@ -33,6 +31,7 @@ from database import (
     get_all_songs,
     get_all_songs_admin,
     get_disabled_song_filenames,
+    hard_delete_song,
     get_songs_by_name,
 )
 from media_utils import download_youtube_audio, extract_urls, is_youtube_url
@@ -344,23 +343,17 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
 
 
 class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
-    """
-    Two-step delete by song name.
-
-    After the user submits the song name the bot:
-      1. Looks up the song (case-insensitive, all availability states).
-      2. Posts a *non-ephemeral* confirmation message in the channel.
-      3. Adds ✅ and 🗑️ reactions so the user can choose the delete type.
-      4. Stores the pending action in ``interaction.client.pending_deletes``.
-
-    The reaction handler (``on_raw_reaction_add`` in bot.py) completes
-    the action when the requesting user reacts.
-    """
+    """Disable or fully delete a song by name using a simple Y/N choice."""
 
     song_name = discord.ui.TextInput(
         label="Song Name",
         placeholder="e.g. Bohemian Rhapsody",
         max_length=100,
+    )
+    hard_delete = discord.ui.TextInput(
+        label="Delete completely? (Y/N)",
+        placeholder="N = disable only, Y = delete DB entry + file",
+        max_length=3,
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -379,6 +372,15 @@ class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
                 ephemeral=True,
             )
             return
+
+        raw_choice = (self.hard_delete.value or "").strip().lower()
+        if raw_choice not in {"y", "yes", "n", "no"}:
+            await interaction.response.send_message(
+                "❌ Enter **Y** to fully delete the song or **N** to disable it.",
+                ephemeral=True,
+            )
+            return
+        should_hard_delete = raw_choice in {"y", "yes"}
 
         if len(matches) > 1:
             # Resolve all "added by" display names concurrently.
@@ -402,10 +404,8 @@ class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
             embed.add_field(
                 name="What to do",
                 value=(
-                    "Identify the song you want to remove from the list above, "
-                    "then use:\n"
-                    "**`/delete_song_id <id>`** — to start the deletion confirmation.\n\n"
-                    "⚠️ Reacting to this message will **not** delete any songs."
+                    "Identify the song you want to remove from the list above, then use:\n"
+                    "**`/delete_song_id <id>`** — if you want to target one exact match."
                 ),
                 inline=False,
             )
@@ -413,22 +413,32 @@ class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
             return
 
         song = matches[0]
-        msg_content = await _build_delete_confirm_message(
-            song, interaction.user.id, interaction.client, interaction.guild
+        if should_hard_delete:
+            hard_delete_song(song["id"])
+            song_path = SONGS_DIR / song["filename"]
+            if song_path.exists():
+                song_path.unlink()
+            await interaction.response.send_message(
+                f"🗑️ Permanently deleted **{song['name']}** by **{song['artist']}**.",
+                ephemeral=True,
+            )
+            return
+
+        if not song.get("available", 1):
+            await interaction.response.send_message(
+                f"⛔ **{song['name']}** is already disabled.",
+                ephemeral=True,
+            )
+            return
+
+        deactivate_song(song["id"])
+        await interaction.response.send_message(
+            (
+                f"⛔ Disabled **{song['name']}** by **{song['artist']}**.\n"
+                "Use `/toggle_song` or `/toggle_song_id` to re-enable it."
+            ),
+            ephemeral=True,
         )
-
-        # Must be non-ephemeral so we can attach reactions.
-        await interaction.response.send_message(msg_content)
-        msg = await interaction.original_response()
-
-        await msg.add_reaction(REACT_DEACTIVATE)
-        await msg.add_reaction(REACT_HARD_DELETE)
-
-        # Register the pending delete keyed on the confirmation message id.
-        interaction.client.pending_deletes[msg.id] = {  # type: ignore[attr-defined]
-            "user_id": interaction.user.id,
-            "song": song,
-        }
 
 
 class DisableSongModal(discord.ui.Modal, title="Disable Song"):
