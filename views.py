@@ -29,6 +29,7 @@ import discord
 from config import ALLOWED_EXTENSIONS, MUSIC_MANAGER_ROLE_ID, SONGS_DIR
 from database import (
     add_song,
+    deactivate_song,
     get_all_songs,
     get_all_songs_admin,
     get_disabled_song_filenames,
@@ -430,6 +431,61 @@ class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
         }
 
 
+class DisableSongModal(discord.ui.Modal, title="Disable Song"):
+    """Disable a song by exact name without exposing hard-delete actions."""
+
+    song_name = discord.ui.TextInput(
+        label="Song Name",
+        placeholder="e.g. Bohemian Rhapsody",
+        max_length=100,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not is_music_manager(interaction):
+            await interaction.response.send_message(
+                "❌ You need the **Music Manager** role to disable songs.", ephemeral=True
+            )
+            return
+
+        query = self.song_name.value
+        matches = get_songs_by_name(query)
+        if not matches:
+            await interaction.response.send_message(
+                f"Sorry, there is no song named **{query}**.",
+                ephemeral=True,
+            )
+            return
+
+        if len(matches) > 1:
+            embed = await _song_table_embed(
+                matches,
+                title=f'🔎 Multiple songs named "{query}"',
+                client=interaction.client,
+                guild=interaction.guild,
+            )
+            embed.add_field(
+                name="What to do",
+                value="Use **`/toggle_song_id <id>`** with the ID shown above.",
+                inline=False,
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        song = matches[0]
+        if not song.get("available", 1):
+            await interaction.response.send_message(
+                f"⛔ **{song['name']}** is already disabled.",
+                ephemeral=True,
+            )
+            return
+
+        deactivate_song(song["id"])
+        await interaction.response.send_message(
+            f"⛔ Disabled **{song['name']}** by **{song['artist']}** (ID: `{song['id']}`).",
+            ephemeral=True,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Paginated song list view
 # ---------------------------------------------------------------------------
@@ -767,3 +823,58 @@ class MusicControlView(discord.ui.View):
         )
         prefix = "👎" if ok else "❌"
         await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)
+
+
+class ShadyControlView(discord.ui.View):
+    """Limited controller exposing only playlist/add/disable actions."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="📋 Playlist",
+        style=discord.ButtonStyle.secondary,
+        custom_id="shady:song_list",
+        row=0,
+    )
+    async def song_list(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        songs = get_all_songs()
+        if not songs:
+            await interaction.response.send_message(
+                "*No songs in the library yet.*", ephemeral=True
+            )
+            return
+        view = SongListView(songs)
+        view._update_buttons()
+        await interaction.response.send_message(
+            embed=view._build_embed(), view=view, ephemeral=True
+        )
+
+    @discord.ui.button(
+        label="➕ Add Song",
+        style=discord.ButtonStyle.success,
+        custom_id="shady:add_song",
+        row=0,
+    )
+    async def add_song(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await interaction.response.send_modal(AddSongModal())
+
+    @discord.ui.button(
+        label="⛔ Disable Song",
+        style=discord.ButtonStyle.danger,
+        custom_id="shady:disable_song",
+        row=0,
+    )
+    async def disable_song(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        if not is_music_manager(interaction):
+            await interaction.response.send_message(
+                "❌ You need the **Music Manager** role to disable songs.", ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(DisableSongModal())

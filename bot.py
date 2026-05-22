@@ -50,6 +50,7 @@ from views import (
     REACT_DEACTIVATE,
     REACT_HARD_DELETE,
     MusicControlView,
+    ShadyControlView,
     _build_delete_confirm_message,
     _resolve_username,
     _song_table_embed,
@@ -98,6 +99,18 @@ def _controller_embed(
     else:
         embed.description = "*Not currently playing. Use ▶ Play to start.*"
     return embed
+
+
+def _shady_controller_embed() -> discord.Embed:
+    return discord.Embed(
+        title="🕶️ The Collector",
+        description=(
+            "Drop songs here and keep the stash growing.\n"
+            "Use **➕ Add Song** to feed the vault, **📋 Playlist** to inspect the haul, "
+            "and **⛔ Disable Song** to bury tracks."
+        ),
+        colour=discord.Colour.dark_purple(),
+    )
 
 
 def _help_tutorial_embed() -> discord.Embed:
@@ -186,6 +199,8 @@ class MusicBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
         self.player = MusicPlayer(self)
         self.pending_deletes: dict[int, dict] = {}
+        self._controller_mode: str = "shady"
+        self._branding_override: str | None = None
         self._branding_mode: str | None = None
         self._branding_task: asyncio.Task | None = None
         self.controller_message: discord.Message | None = None
@@ -194,6 +209,7 @@ class MusicBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         self.add_view(MusicControlView())
+        self.add_view(ShadyControlView())
         await self.tree.sync()
 
     async def on_ready(self) -> None:
@@ -223,8 +239,12 @@ class MusicBot(commands.Bot):
         async for msg in channel.history(limit=CONTROLLER_SEARCH_LIMIT):
             if msg.author == self.user and msg.components:
                 self.controller_message = msg
+                await self.refresh_controller_status()
                 return
-        msg = await channel.send(embed=_controller_embed(), view=MusicControlView())
+        msg = await channel.send(
+            embed=self._active_controller_embed(),
+            view=self._active_controller_view(),
+        )
         self.controller_message = msg
         log.info("Controller posted in #%s", channel.name)
 
@@ -239,9 +259,12 @@ class MusicBot(commands.Bot):
     async def _apply_branding_for_day(self) -> None:
         if self.user is None:
             return
-        # Monday=0, Sunday=6; Sunday triggers heaven mode.
-        weekday = datetime.datetime.now(datetime.UTC).weekday()
-        target = "heaven" if weekday == 6 else "suffering"
+        if self._branding_override == "heaven":
+            target = "heaven"
+        else:
+            # Monday=0, Sunday=6; Sunday triggers heaven mode.
+            weekday = datetime.datetime.now(datetime.UTC).weekday()
+            target = "heaven" if weekday == 6 else "suffering"
         if target == self._branding_mode:
             return
 
@@ -267,6 +290,28 @@ class MusicBot(commands.Bot):
         except Exception as exc:
             log.warning("Could not apply %s branding: %s", target, exc)
 
+    def _active_controller_view(self) -> discord.ui.View:
+        if self._controller_mode == "shady":
+            return ShadyControlView()
+        return MusicControlView()
+
+    def _active_controller_embed(self) -> discord.Embed:
+        if self._controller_mode == "shady":
+            return _shady_controller_embed()
+        guild = self.controller_message.guild if self.controller_message else None
+        if self._controller_song:
+            return _controller_embed(
+                song=self._controller_song,
+                added_by=None,
+                is_paused=self.player.is_paused(),
+            )
+        if self._controller_label:
+            return _controller_embed(
+                label=self._controller_label,
+                is_paused=self.player.is_paused(),
+            )
+        return _controller_embed()
+
     async def submit_current_song_feedback(
         self, interaction: discord.Interaction, is_like: bool
     ) -> tuple[bool, str]:
@@ -285,25 +330,31 @@ class MusicBot(commands.Bot):
         """Refresh the tracked controller message using cached current-track state."""
         if self.controller_message is None:
             return
-        guild = self.controller_message.guild
-        if self._controller_song:
-            added_by = await _resolve_username(
-                self, self._controller_song.get("added_by", ""), guild
-            )
-            embed = _controller_embed(
-                song=self._controller_song,
-                added_by=added_by,
-                is_paused=self.player.is_paused(),
-            )
-        elif self._controller_label:
-            embed = _controller_embed(
-                label=self._controller_label,
-                is_paused=self.player.is_paused(),
-            )
+        if self._controller_mode == "shady":
+            embed = _shady_controller_embed()
         else:
-            embed = _controller_embed()
+            guild = self.controller_message.guild
+            if self._controller_song:
+                added_by = await _resolve_username(
+                    self, self._controller_song.get("added_by", ""), guild
+                )
+                embed = _controller_embed(
+                    song=self._controller_song,
+                    added_by=added_by,
+                    is_paused=self.player.is_paused(),
+                )
+            elif self._controller_label:
+                embed = _controller_embed(
+                    label=self._controller_label,
+                    is_paused=self.player.is_paused(),
+                )
+            else:
+                embed = _controller_embed()
         try:
-            await self.controller_message.edit(embed=embed)
+            await self.controller_message.edit(
+                embed=embed,
+                view=self._active_controller_view(),
+            )
         except Exception as exc:
             log.warning("Failed to update controller embed: %s", exc)
 
@@ -372,7 +423,10 @@ bot = MusicBot()
 
 @bot.tree.command(name="controller", description="Post the controller panel.")
 async def cmd_controller(interaction: discord.Interaction) -> None:
-    await interaction.response.send_message(embed=_controller_embed(), view=MusicControlView())
+    await interaction.response.send_message(
+        embed=bot._active_controller_embed(),
+        view=bot._active_controller_view(),
+    )
 
 
 @bot.tree.command(name="help", description="DM a quick tutorial and command list.")
@@ -703,6 +757,55 @@ async def cmd_dislike(interaction: discord.Interaction) -> None:
     ok, msg = await bot.submit_current_song_feedback(interaction, is_like=False)
     prefix = "👎" if ok else "❌"
     await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)
+
+
+@bot.tree.command(name="pardon", description="Switch to the limited shady controller mode.")
+async def cmd_pardon(interaction: discord.Interaction) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role.", ephemeral=True
+        )
+        return
+    bot._controller_mode = "shady"
+    await bot.refresh_controller_status()
+    await interaction.response.send_message(
+        "🕶️ Entered shady collection mode (Playlist/Add/Disable only).",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="damn", description="Switch to full mode with default day-based persona.")
+async def cmd_damn(interaction: discord.Interaction) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role.", ephemeral=True
+        )
+        return
+    bot._controller_mode = "full"
+    bot._branding_override = None
+    await bot._apply_branding_for_day()
+    await bot.refresh_controller_status()
+    await interaction.response.send_message(
+        "🔥 Full mode enabled. Default day-based persona restored.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="save", description="Switch to full mode and force Heaven persona.")
+async def cmd_save(interaction: discord.Interaction) -> None:
+    if not is_music_manager(interaction):
+        await interaction.response.send_message(
+            "❌ You need the **Music Manager** role.", ephemeral=True
+        )
+        return
+    bot._controller_mode = "full"
+    bot._branding_override = "heaven"
+    await bot._apply_branding_for_day()
+    await bot.refresh_controller_status()
+    await interaction.response.send_message(
+        "✨ Full mode enabled. Heaven persona forced until `/damn` is used.",
+        ephemeral=True,
+    )
 
 
 if __name__ == "__main__":
