@@ -31,6 +31,7 @@ from database import (
     add_song,
     get_all_songs,
     get_all_songs_admin,
+    get_disabled_song_filenames,
     get_songs_by_name,
 )
 from media_utils import download_youtube_audio, extract_urls, is_youtube_url
@@ -319,11 +320,7 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
 
         added_by = str(interaction.user.id)
         is_manager = is_music_manager(interaction)
-        disabled_filenames = {
-            str(song.get("filename", ""))
-            for song in get_all_songs_admin()
-            if not song.get("available", 1)
-        }
+        disabled_filenames = get_disabled_song_filenames()
         artist = (self.artist.value or "").strip() or "YouTube"
         custom_name = (self.song_name.value or "").strip()
         lines: list[str] = []

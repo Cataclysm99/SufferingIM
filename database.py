@@ -78,6 +78,14 @@ def get_all_songs_admin() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_disabled_song_filenames() -> set[str]:
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT filename FROM songs WHERE available = 0"
+        ).fetchall()
+    return {str(r["filename"]) for r in rows if r["filename"]}
+
+
 def get_song(song_id: int) -> Optional[dict]:
     with _get_conn() as conn:
         row = conn.execute(
@@ -267,4 +275,3 @@ def increment_ad_play_count(ad_id: int) -> None:
             (ad_id,),
         )
         conn.commit()
-
