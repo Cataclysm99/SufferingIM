@@ -287,12 +287,6 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
     )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not is_music_manager(interaction):
-            await interaction.response.send_message(
-                "❌ You need the **Music Manager** role to add songs.", ephemeral=True
-            )
-            return
-
         urls = extract_urls(self.youtube_url.value or "")
         if not urls:
             await interaction.response.send_message(
@@ -324,13 +318,30 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
             return
 
         added_by = str(interaction.user.id)
+        is_manager = is_music_manager(interaction)
+        disabled_filenames = {
+            str(song.get("filename", ""))
+            for song in get_all_songs_admin()
+            if not song.get("available", 1)
+        }
         artist = (self.artist.value or "").strip() or "YouTube"
         custom_name = (self.song_name.value or "").strip()
         lines: list[str] = []
+        blocked_lines: list[str] = []
         for idx, track in enumerate(downloaded):
+            if not is_manager and track.name in disabled_filenames:
+                blocked_lines.append(
+                    f"⛔ **{track.stem}** was previously disabled and can only be added by a **Music Manager**."
+                )
+                continue
             name = custom_name if idx == 0 and custom_name else track.stem
             song_id = add_song(name, artist, track.name, added_by)
             lines.append(f"✅ Added **{name}** (ID: `{song_id}`)")
+        if not lines and blocked_lines:
+            await interaction.followup.send("\n".join(blocked_lines), ephemeral=True)
+            return
+        if blocked_lines:
+            lines.extend(blocked_lines)
         await interaction.followup.send("\n".join(lines), ephemeral=True)
 
 
@@ -708,11 +719,6 @@ class MusicControlView(discord.ui.View):
     async def add_song(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
-        if not is_music_manager(interaction):
-            await interaction.response.send_message(
-                "❌ You need the **Music Manager** role to add songs.", ephemeral=True
-            )
-            return
         await interaction.response.send_modal(AddSongModal())
 
     @discord.ui.button(
