@@ -81,7 +81,7 @@ intents.voice_states = True
 
 _SUFFERING_LINES: tuple[str, ...] = (
     "💀 | || || |_",
-    "🛒 Hey you, you're finally awake.",
+    "🛒 Hey, you. You're finally awake.",
     "🎁 https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "🗣️ They don't know me son.",
     "🧠 The numbers, Mason, what do they mean?",
