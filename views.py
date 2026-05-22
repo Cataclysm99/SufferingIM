@@ -46,7 +46,7 @@ _COL_ADDED_BY = 14
 # Number of history messages to scan when searching for an existing controller.
 CONTROLLER_SEARCH_LIMIT = 30
 
-# Reaction emojis for the two-step delete confirmation.
+# Reaction emojis used by the legacy `/delete_song_id` confirmation flow.
 REACT_DEACTIVATE = "✅"
 REACT_HARD_DELETE = "🗑️"
 
@@ -126,8 +126,8 @@ async def _build_delete_confirm_message(
     client: discord.Client,
     guild: discord.Guild | None = None,
 ) -> str:
-    """Build the non-ephemeral confirmation message used by both the
-    name-based delete modal and the ``/delete_song_id`` command."""
+    """Build the non-ephemeral reaction confirmation message for
+    ``/delete_song_id``."""
     added_by_display = await _resolve_username(client, song.get("added_by", ""), guild)
     status = "✅ active" if song.get("available", 1) else "⛔ deactivated"
     return (
