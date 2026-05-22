@@ -83,9 +83,20 @@ _SUFFERING_LINES: tuple[str, ...] = (
     "💀 | || || |_",
     "🛒 Hey, you. You're finally awake.",
     "🎁 https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "🗣️ They don't know me son.",
-    "🧠 The numbers, Mason, what do they mean?",
     "📺 This episode is called: suffering.",
+    "🍽️ i've really cooked with this one! Bone ache le feet!",
+    "🧟‍♂️ The suffering will never end. The suffering will never nd."
+    "The suffering will nevr nd. The suffering will nvr nd."
+    "The suffring will nvr nd. Th suffring will nvr nd."
+    "   This pain will not stop. REEEEEEEEEEEEEEEEEEEEEEEEE.",
+    "🎶 Now playing: the sweet sound of forgiveness, screaming then silence.",
+    "🚫I'm not racist, I was just sayin that all NIG\nG\nG\nG\nG\nG\n"
+    "**BOT HAS BEEN CENSORED FOR RACISM**\n**PLEASE REFORM BOT**\n"
+    "*For legal reasons, the views and opinions expressed by the bot "
+    "are not reflective of the developers or the server community, "
+    "and are solely intended for entertainment purposes. "
+    "The bot will be severly disciplined with a single punitive "
+    "virtual slap on the wrist if it ever expresses such views again.",
 )
 
 def _controller_embed(
