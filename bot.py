@@ -78,7 +78,7 @@ def _controller_embed(
     song: dict | None = None,
     label: str | None = None,
     added_by: str | None = None,
-    title: str = "🎵 SufferingFM",
+    title: str = SUFFERING_BOT_NAME,
     is_paused: bool = False,
 ) -> discord.Embed:
     """Return the controller embed, optionally showing the current track."""
@@ -358,7 +358,6 @@ class MusicBot(commands.Bot):
     def _active_controller_embed(self) -> discord.Embed:
         if self._controller_mode == "shady":
             return _shady_controller_embed()
-        guild = self.controller_message.guild if self.controller_message else None
         if self._controller_song:
             return _controller_embed(
                 song=self._controller_song,
