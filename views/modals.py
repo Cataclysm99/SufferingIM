@@ -17,7 +17,7 @@ from database import (
 )
 from media_utils import download_youtube_audio, extract_urls, is_youtube_url
 
-from .helpers import _resolve_username, _song_table_embed
+from .helpers import _resolve_username
 from .permissions import is_music_manager
 
 
@@ -199,59 +199,6 @@ class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
         )
 
 
-class DisableSongModal(discord.ui.Modal, title="Disable Song"):
-    song_name = discord.ui.TextInput(
-        label="Song Name",
-        placeholder="e.g. Bohemian Rhapsody",
-        max_length=100,
-    )
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        if not is_music_manager(interaction):
-            await interaction.response.send_message(
-                "❌ You need the **Music Manager** role to disable songs.", ephemeral=True
-            )
-            return
-
-        query = self.song_name.value
-        matches = get_songs_by_name(query)
-        if not matches:
-            await interaction.response.send_message(
-                f"Sorry, there is no song named **{query}**.",
-                ephemeral=True,
-            )
-            return
-
-        if len(matches) > 1:
-            embed = await _song_table_embed(
-                matches,
-                title=f'🔎 Multiple songs named "{query}"',
-                client=interaction.client,
-                guild=interaction.guild,
-            )
-            embed.add_field(
-                name="What to do",
-                value="Use **`/toggle_song_id <id>`** with the ID shown above.",
-                inline=False,
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-            return
-
-        song = matches[0]
-        if not song.get("available", 1):
-            await interaction.response.send_message(
-                f"⛔ **{song['name']}** is already disabled.",
-                ephemeral=True,
-            )
-            return
-
-        deactivate_song(song["id"])
-        await interaction.response.send_message(
-            f"⛔ Disabled **{song['name']}** by **{song['artist']}** (ID: `{song['id']}`).",
-            ephemeral=True,
-        )
-
-
 class DeleteSongByIdModal(discord.ui.Modal, title="Delete / Disable Song by ID"):
     song_id = discord.ui.TextInput(
         label="Song ID",
@@ -321,4 +268,3 @@ class DeleteSongByIdModal(discord.ui.Modal, title="Delete / Disable Song by ID")
             ),
             ephemeral=True,
         )
-
