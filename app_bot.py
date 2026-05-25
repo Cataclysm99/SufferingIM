@@ -219,8 +219,8 @@ class MusicBot(commands.Bot):
         self.controller_message: discord.Message | None = None
         self._controller_song: dict | None = None
         self._controller_label: str | None = None
-        self._purge_password: str | None = None
-        self._purge_password_expiry: float = 0.0
+        self._purge_code: str | None = None
+        self._purge_code_expiry: float = 0.0
         self._startup_state_announcement_sent: bool = False
 
     async def setup_hook(self) -> None:

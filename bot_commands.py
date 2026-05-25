@@ -44,21 +44,21 @@ class PurgeSongsConfirmModal(discord.ui.Modal, title="Confirm Full Song Purge"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         client = interaction.client  # type: ignore[attr-defined]
-        if not client._purge_password or time.time() > client._purge_password_expiry:
+        if not client._purge_code or time.time() > client._purge_code_expiry:
             await interaction.response.send_message(
                 "❌ The purge session has expired. Run `/purge_songs` again.",
                 ephemeral=True,
             )
             return
-        if self.password.value.strip() != client._purge_password:
+        if self.password.value.strip() != client._purge_code:
             await interaction.response.send_message(
                 "❌ Incorrect password. Purge aborted.",
                 ephemeral=True,
             )
             return
 
-        client._purge_password = None
-        client._purge_password_expiry = 0.0
+        client._purge_code = None
+        client._purge_code_expiry = 0.0
 
         await interaction.response.defer(ephemeral=True)
         deleted = purge_all_songs()
@@ -481,12 +481,12 @@ def register_commands(bot: MusicBot) -> None:
             return
 
         alphabet = string.ascii_letters + string.digits
-        password = "".join(secrets.choice(alphabet) for _ in range(10))
-        bot._purge_password = password
-        bot._purge_password_expiry = time.time() + 300
+        confirmation_code = "".join(secrets.choice(alphabet) for _ in range(10))
+        bot._purge_code = confirmation_code
+        bot._purge_code_expiry = time.time() + 300
 
         print("\n" + "=" * 60, flush=True)
-        print(f"[PURGE CONFIRM] One-time password: {password}", flush=True)  # noqa: S106
+        print(f"[PURGE CONFIRM] One-time password: {confirmation_code}", flush=True)  # noqa: S106
         print("[PURGE CONFIRM] Password expires in 5 minutes.", flush=True)
         print("=" * 60 + "\n", flush=True)
 
