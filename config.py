@@ -1,6 +1,7 @@
 """
 config.py – centralised configuration loaded from environment / .env file.
 """
+
 import os
 from pathlib import Path
 
@@ -77,12 +78,24 @@ DB_PATH: str = str(BASE_DIR / "songs.db")
 COLLECTOR_BOT_NAME: str = os.getenv("COLLECTOR_BOT_NAME", "CollectorIM")
 SUFFERING_BOT_NAME: str = os.getenv("SUFFERING_BOT_NAME", "SufferFML")
 HEAVEN_BOT_NAME: str = os.getenv("HEAVEN_BOT_NAME", "HeavenIN")
-COLLECTOR_AVATAR_PATH: str = os.getenv("COLLECTOR_AVATAR_PATH", str(BASE_DIR / "profiles" / "collector.jpg"))
-SUFFERING_AVATAR_PATH: str = os.getenv("SUFFERING_AVATAR_PATH", str(BASE_DIR / "profiles" / "suffer.jpg"))
-HEAVEN_AVATAR_PATH: str = os.getenv("HEAVEN_AVATAR_PATH", str(BASE_DIR / "profiles" / "heaven.jpg"))
-COLLECTOR_BANNER_PATH: str = os.getenv("COLLECTOR_BANNER_PATH", "")
-SUFFERING_BANNER_PATH: str = os.getenv("SUFFERING_BANNER_PATH", "")
-HEAVEN_BANNER_PATH: str = os.getenv("HEAVEN_BANNER_PATH", "")
+COLLECTOR_AVATAR_PATH: str = os.getenv(
+    "COLLECTOR_AVATAR_PATH", str(BASE_DIR / "profiles" / "collector.jpg")
+)
+SUFFERING_AVATAR_PATH: str = os.getenv(
+    "SUFFERING_AVATAR_PATH", str(BASE_DIR / "profiles" / "suffer.jpg")
+)
+HEAVEN_AVATAR_PATH: str = os.getenv(
+    "HEAVEN_AVATAR_PATH", str(BASE_DIR / "profiles" / "heaven.jpg")
+)
+COLLECTOR_BANNER_PATH: str = os.getenv(
+    "COLLECTOR_BANNER_PATH", str(BASE_DIR / "profiles" / "collector_banner.jpg")
+)
+SUFFERING_BANNER_PATH: str = os.getenv(
+    "SUFFERING_BANNER_PATH", str(BASE_DIR / "profiles" / "suffer_banner.jpg")
+)
+HEAVEN_BANNER_PATH: str = os.getenv(
+    "HEAVEN_BANNER_PATH", str(BASE_DIR / "profiles" / "heaven_banner.jpg")
+)
 CONTROLLER_STATE_PATH: Path = BASE_DIR / "controller_state.json"
 
 # ── FFmpeg options ────────────────────────────────────────────────────────────
@@ -94,4 +107,13 @@ FFMPEG_OPTIONS: dict = {"options": "-vn -loglevel warning -af aresample=async=1"
 FFMPEG_EXECUTABLE: str = os.getenv("FFMPEG_EXECUTABLE", "").strip()
 
 # Allowed audio extensions for uploads
-ALLOWED_EXTENSIONS: tuple = (".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac", ".opus", ".webm")
+ALLOWED_EXTENSIONS: tuple = (
+    ".mp3",
+    ".wav",
+    ".ogg",
+    ".flac",
+    ".m4a",
+    ".aac",
+    ".opus",
+    ".webm",
+)

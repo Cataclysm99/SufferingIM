@@ -904,7 +904,7 @@ async def cmd_pardon(interaction: discord.Interaction) -> None:
     bot._save_controller_state()
     await bot._apply_branding_for_day()
     await bot.refresh_controller_status()
-    await interaction.response.send_message(bot._state_announcement())
+    await interaction.response.send_message(await bot._state_announcement())
 
 
 @bot.tree.command(name="damn", description="Switch to full mode with default day-based persona.")
@@ -934,7 +934,7 @@ async def cmd_save(interaction: discord.Interaction) -> None:
     bot._save_controller_state()
     await bot._apply_branding_for_day()
     await bot.refresh_controller_status()
-    await interaction.response.send_message(bot._state_announcement())
+    await interaction.response.send_message(await bot._state_announcement())
 
 
 class PurgeSongsConfirmModal(discord.ui.Modal, title="Confirm Full Song Purge"):
