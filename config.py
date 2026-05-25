@@ -40,6 +40,7 @@ def _int_list_env(key: str) -> tuple[int, ...]:
 # Channel where the persistent controller message is (re-)posted on startup.
 # Leave empty / 0 to skip auto-posting.
 CONTROLLER_CHANNEL_ID: int = _int_env("CONTROLLER_CHANNEL_ID", 0)
+QUOTES_CHANNEL_ID: int = _int_env("QUOTES_CHANNEL_ID", 0)
 
 # ── Permissions ───────────────────────────────────────────────────────────────
 # Discord role ID whose members may add, delete, and toggle songs.
@@ -79,6 +80,7 @@ HEAVEN_BOT_NAME: str = os.getenv("HEAVEN_BOT_NAME", "HeavenIN")
 COLLECTOR_AVATAR_PATH: str = os.getenv("COLLECTOR_AVATAR_PATH", str(BASE_DIR / "profiles" / "collector.jpg"))
 SUFFERING_AVATAR_PATH: str = os.getenv("SUFFERING_AVATAR_PATH", str(BASE_DIR / "profiles" / "suffer.jpg"))
 HEAVEN_AVATAR_PATH: str = os.getenv("HEAVEN_AVATAR_PATH", str(BASE_DIR / "profiles" / "heaven.jpg"))
+COLLECTOR_BANNER_PATH: str = os.getenv("COLLECTOR_BANNER_PATH", "")
 SUFFERING_BANNER_PATH: str = os.getenv("SUFFERING_BANNER_PATH", "")
 HEAVEN_BANNER_PATH: str = os.getenv("HEAVEN_BANNER_PATH", "")
 CONTROLLER_STATE_PATH: Path = BASE_DIR / "controller_state.json"

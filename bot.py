@@ -24,12 +24,14 @@ from config import (
     ALLOWED_EXTENSIONS,
     CONTROLLER_CHANNEL_ID,
     COLLECTOR_AVATAR_PATH,
+    COLLECTOR_BANNER_PATH,
     COLLECTOR_BOT_NAME,
     CONTROLLER_STATE_PATH,
     DJ_EVENTS_DIR,
     HEAVEN_AVATAR_PATH,
     HEAVEN_BANNER_PATH,
     HEAVEN_BOT_NAME,
+    QUOTES_CHANNEL_ID,
     RIGGED_SONG_IDS,
     SONGS_DIR,
     SUFFERING_AVATAR_PATH,
@@ -84,7 +86,7 @@ _SUFFERING_LINES: tuple[str, ...] = (
     "🛒 Hey, you. You're finally awake.",
     "🎁 https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     "📺 This episode is called: suffering.",
-    "🍽️ i've really cooked with this one! Bone ache le feet!",
+    "🍽️ i've really cooked with this one! Bone ape le feet!",
     "🧟‍♂️ The suffering will never end. The suffering will never nd."
     "The suffering will nevr nd. The suffering will nvr nd."
     "The suffring will nvr nd. Th suffring will nvr nd."
@@ -96,7 +98,11 @@ _SUFFERING_LINES: tuple[str, ...] = (
     "are not reflective of the developers or the server community, "
     "and are solely intended for entertainment purposes. "
     "The bot will be severly disciplined with a single punitive "
-    "virtual slap on the wrist if it ever expresses such views again.",
+    "virtual slap on the wrist the next time it expresses these views again.",
+    "quoteable_moment",
+    "quoteable_moment",
+    "quoteable_moment",
+    "quoteable_moment"
 )
 
 def _controller_embed(
@@ -316,6 +322,7 @@ class MusicBot(commands.Bot):
         elif target == "collector":
             username = COLLECTOR_BOT_NAME
             avatar = _read_optional_bytes(COLLECTOR_AVATAR_PATH)
+            banner = _read_optional_bytes(COLLECTOR_BANNER_PATH)
         else:
             username = SUFFERING_BOT_NAME
             avatar = _read_optional_bytes(SUFFERING_AVATAR_PATH)
@@ -412,13 +419,20 @@ class MusicBot(commands.Bot):
         weekday = datetime.datetime.now(datetime.timezone.utc).weekday()
         return "heaven" if weekday == 6 else "suffering"
 
-    def _state_announcement(self) -> str:
+    async def _state_announcement(self) -> str:
         key = self._state_key()
         if key == "collector":
             return "🕶️ The Collector has come to collect."
         if key == "heaven":
             return "✨ Heaven's gates have been thrown open."
-        return random.choice(_SUFFERING_LINES)
+        announcement = random.choice(_SUFFERING_LINES)
+        if announcement != "quoteable_moment":
+            return announcement
+        quote = random.choice([
+            m.content async for m in self.get_channel(QUOTES_CHANNEL_ID).history(limit=10000)
+            if len(m.content) >= 2
+        ])
+        return f"You can't run from a past that haunts you...\n\n{quote}"
 
     async def announce_state(self, channel: discord.abc.Messageable | None) -> None:
         target_channel = channel
@@ -426,7 +440,7 @@ class MusicBot(commands.Bot):
             target_channel = self.controller_message.channel if self.controller_message else None
         if target_channel is None:
             return
-        await target_channel.send(self._state_announcement())
+        await target_channel.send(await self._state_announcement())
 
     async def submit_current_song_feedback(
         self, interaction: discord.Interaction, is_like: bool
@@ -905,7 +919,7 @@ async def cmd_damn(interaction: discord.Interaction) -> None:
     bot._save_controller_state()
     await bot._apply_branding_for_day()
     await bot.refresh_controller_status()
-    await interaction.response.send_message(bot._state_announcement())
+    await interaction.response.send_message(await bot._state_announcement())
 
 
 @bot.tree.command(name="save", description="Switch to full mode and force Heaven persona.")
