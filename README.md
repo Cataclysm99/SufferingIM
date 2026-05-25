@@ -87,6 +87,7 @@ All audio extensions in config are supported (`.mp3`, `.wav`, `.ogg`, `.flac`, `
 - `bot.py` – thin entrypoint / bootstrap
 - `app_bot.py` – `MusicBot` class, controller + persona state logic
 - `bot_commands.py` – slash command and modal registration
+- `views/` – modular UI layer (`controller.py`, `modals.py`, `helpers.py`, etc.)
 
 ---
 

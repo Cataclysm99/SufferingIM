@@ -20,6 +20,14 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _is_reserved_media_filename(filename: str) -> bool:
+    """Return True for placeholder/hidden filenames that should never enter DB."""
+    name = Path(filename).name.strip()
+    if not name:
+        return True
+    return name.startswith(".")
+
+
 def init_db() -> None:
     """Create required tables."""
     with _get_conn() as conn:
@@ -127,6 +135,8 @@ def search_songs(field: str, query: str) -> list[dict]:
 
 
 def add_song(name: str, artist: str, filename: str, added_by: str = "") -> int:
+    if _is_reserved_media_filename(filename):
+        raise ValueError(f"Reserved media filename is not allowed: {filename}")
     with _get_conn() as conn:
         cur = conn.execute(
             "INSERT INTO songs (name, artist, filename, added_by) VALUES (?, ?, ?, ?)",
@@ -257,7 +267,11 @@ def reset_negative_vote_scores() -> None:
 def sync_ads_from_disk() -> None:
     """Ensure every file in ADS_DIR exists in the ads table."""
     ADS_DIR.mkdir(parents=True, exist_ok=True)
-    files = [f.name for f in ADS_DIR.iterdir() if f.is_file()]
+    files = [
+        f.name
+        for f in ADS_DIR.iterdir()
+        if f.is_file() and not _is_reserved_media_filename(f.name)
+    ]
     if not files:
         return
     with _get_conn() as conn:

@@ -176,7 +176,11 @@ def register_commands(bot: MusicBot) -> None:
             for p in downloaded:
                 if raw_target == "song":
                     dl_artist = playlist_title or "YouTube"
-                    sid = add_song(p.stem, dl_artist, p.name, str(interaction.user.id))
+                    try:
+                        sid = add_song(p.stem, dl_artist, p.name, str(interaction.user.id))
+                    except ValueError:
+                        failed_urls.append(url)
+                        continue
                     added_song_ids.append(sid)
                 else:
                     added_ad_files.append(p.name)
@@ -187,7 +191,16 @@ def register_commands(bot: MusicBot) -> None:
             if raw_target == "song":
                 display_name = (name or dest.stem).strip() or dest.stem
                 display_artist = (artist or "Unknown").strip() or "Unknown"
-                sid = add_song(display_name, display_artist, dest.name, str(interaction.user.id))
+                try:
+                    sid = add_song(display_name, display_artist, dest.name, str(interaction.user.id))
+                except ValueError:
+                    if dest.exists():
+                        dest.unlink()
+                    await interaction.followup.send(
+                        "❌ Invalid reserved filename; upload was skipped.",
+                        ephemeral=True,
+                    )
+                    return
                 added_song_ids.append(sid)
             else:
                 added_ad_files.append(dest.name)
