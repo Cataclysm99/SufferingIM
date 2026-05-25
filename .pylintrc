@@ -1,0 +1,26 @@
+[MASTER]
+ignore=.venv
+
+[MESSAGES CONTROL]
+disable=
+    missing-module-docstring,
+    missing-class-docstring,
+    missing-function-docstring,
+    line-too-long,
+    too-many-arguments,
+    too-many-positional-arguments,
+    too-many-instance-attributes,
+    too-many-branches,
+    too-many-locals,
+    too-many-statements,
+    too-many-return-statements,
+    broad-exception-caught,
+    protected-access,
+    trailing-newlines,
+    unused-argument,
+    duplicate-code,
+    import-outside-toplevel,
+    arguments-differ
+
+[FORMAT]
+max-line-length=120
