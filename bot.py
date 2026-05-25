@@ -105,15 +105,21 @@ _SUFFERING_LINES: tuple[str, ...] = (
     "quoteable_moment"
 )
 
+
+class BrandingRateLimitError(RuntimeError):
+    """Raised when Discord profile edits are rate-limited."""
+
+
 def _controller_embed(
     song: dict | None = None,
     label: str | None = None,
     added_by: str | None = None,
     title: str = SUFFERING_BOT_NAME,
     is_paused: bool = False,
+    colour: discord.Colour | None = None,
 ) -> discord.Embed:
     """Return the controller embed, optionally showing the current track."""
-    embed = discord.Embed(title=f"🎵 {title}", colour=discord.Colour.purple())
+    embed = discord.Embed(title=f"🎵 {title}", colour=colour or discord.Colour.purple())
     status = "⏸ Paused" if is_paused else "▶ Playing"
     if song:
         embed.add_field(
@@ -137,7 +143,7 @@ def _controller_embed(
     return embed
 
 
-def _shady_controller_embed() -> discord.Embed:
+def _shady_controller_embed(colour: discord.Colour | None = None) -> discord.Embed:
     return discord.Embed(
         title=f"🕶️ {COLLECTOR_BOT_NAME}",
         description=(
@@ -145,7 +151,7 @@ def _shady_controller_embed() -> discord.Embed:
             "Use **➕ Add Song** to feed the vault, **📋 Playlist** to inspect the haul, "
             "and **⛔ Disable Song** to bury tracks."
         ),
-        colour=discord.Colour.dark_purple(),
+        colour=colour or discord.Colour.purple(),
     )
 
 
@@ -264,7 +270,10 @@ class MusicBot(commands.Bot):
             (DJ_EVENTS_DIR / day).mkdir(parents=True, exist_ok=True)
         self.player.set_dj_events(DJEventScheduler(DJ_EVENTS_DIR))
 
-        await self._apply_branding_for_day()
+        try:
+            await self._apply_branding_for_day()
+        except Exception as exc:
+            log.warning("Initial branding apply failed: %s", exc)
         if self._branding_task is None or self._branding_task.done():
             self._branding_task = asyncio.create_task(self._branding_loop())
 
@@ -280,11 +289,15 @@ class MusicBot(commands.Bot):
         channel = self.get_channel(CONTROLLER_CHANNEL_ID)
         if not isinstance(channel, discord.TextChannel):
             return
+        stale_controllers: list[discord.Message] = []
         async for msg in channel.history(limit=CONTROLLER_SEARCH_LIMIT):
             if msg.author == self.user and msg.components:
-                self.controller_message = msg
-                await self.refresh_controller_status()
-                return
+                stale_controllers.append(msg)
+        for stale in stale_controllers:
+            try:
+                await stale.delete()
+            except Exception as exc:
+                log.warning("Failed to delete old controller message %s: %s", stale.id, exc)
         msg = await channel.send(
             embed=self._active_controller_embed(),
             view=self._active_controller_view(),
@@ -339,6 +352,10 @@ class MusicBot(commands.Bot):
             self._branding_mode = target
             await self._update_guild_nicknames(username)
             log.info("Branding switched to %s mode.", target)
+        except discord.HTTPException as exc:
+            if "too fast" in str(exc).lower():
+                raise BrandingRateLimitError(str(exc)) from exc
+            log.warning("Could not apply %s branding: %s", target, exc)
         except Exception as exc:
             log.warning("Could not apply %s branding: %s", target, exc)
 
@@ -394,22 +411,25 @@ class MusicBot(commands.Bot):
         return MusicControlView()
 
     def _active_controller_embed(self) -> discord.Embed:
+        colour = self._state_colour()
         if self._controller_mode == "shady":
-            return _shady_controller_embed()
+            return _shady_controller_embed(colour=colour)
         if self._controller_song:
             return _controller_embed(
                 song=self._controller_song,
                 added_by=None,
                 title=self._current_brand_name(),
                 is_paused=self.player.is_paused(),
+                colour=colour,
             )
         if self._controller_label:
             return _controller_embed(
                 label=self._controller_label,
                 title=self._current_brand_name(),
                 is_paused=self.player.is_paused(),
+                colour=colour,
             )
-        return _controller_embed(title=self._current_brand_name())
+        return _controller_embed(title=self._current_brand_name(), colour=colour)
 
     def _state_key(self) -> str:
         if self._persona_mode == "forced_heaven":
@@ -418,6 +438,34 @@ class MusicBot(commands.Bot):
             return "collector"
         weekday = datetime.datetime.now(datetime.timezone.utc).weekday()
         return "heaven" if weekday == 6 else "suffering"
+
+    def _state_colour(self) -> discord.Colour:
+        key = self._state_key()
+        if key == "collector":
+            return discord.Colour.purple()
+        if key == "heaven":
+            return discord.Colour.from_rgb(255, 215, 0)
+        return discord.Colour.from_rgb(0, 0, 0)
+
+    async def _switch_persona_with_branding(self, persona_mode: str) -> bool:
+        previous_persona = self._persona_mode
+        self._persona_mode = persona_mode
+        self._sync_controller_mode_from_persona_mode()
+        self._save_controller_state()
+        try:
+            await self._apply_branding_for_day()
+        except BrandingRateLimitError:
+            self._persona_mode = previous_persona
+            self._sync_controller_mode_from_persona_mode()
+            self._save_controller_state()
+            try:
+                await self._apply_branding_for_day()
+            except Exception as exc:
+                log.warning("Failed to restore prior branding after rate limit: %s", exc)
+            await self.refresh_controller_status()
+            return False
+        await self.refresh_controller_status()
+        return True
 
     async def _state_announcement(self) -> str:
         key = self._state_key()
@@ -460,8 +508,9 @@ class MusicBot(commands.Bot):
         """Refresh the tracked controller message using cached current-track state."""
         if self.controller_message is None:
             return
+        colour = self._state_colour()
         if self._controller_mode == "shady":
-            embed = _shady_controller_embed()
+            embed = _shady_controller_embed(colour=colour)
         else:
             guild = self.controller_message.guild
             if self._controller_song:
@@ -473,15 +522,20 @@ class MusicBot(commands.Bot):
                     added_by=added_by,
                     title=self._current_brand_name(),
                     is_paused=self.player.is_paused(),
+                    colour=colour,
                 )
             elif self._controller_label:
                 embed = _controller_embed(
                     label=self._controller_label,
                     title=self._current_brand_name(),
                     is_paused=self.player.is_paused(),
+                    colour=colour,
                 )
             else:
-                embed = _controller_embed(title=self._current_brand_name())
+                embed = _controller_embed(
+                    title=self._current_brand_name(),
+                    colour=colour,
+                )
         try:
             await self.controller_message.edit(
                 embed=embed,
@@ -899,11 +953,13 @@ async def cmd_pardon(interaction: discord.Interaction) -> None:
             "❌ You need the **Music Manager** role.", ephemeral=True
         )
         return
-    bot._persona_mode = "collector"
-    bot._sync_controller_mode_from_persona_mode()
-    bot._save_controller_state()
-    await bot._apply_branding_for_day()
-    await bot.refresh_controller_status()
+    switched = await bot._switch_persona_with_branding("collector")
+    if not switched:
+        await interaction.response.send_message(
+            "⚠️ The veil would not shift. Something old and patient is resisting the change.",
+            ephemeral=True,
+        )
+        return
     await interaction.response.send_message(await bot._state_announcement())
 
 
@@ -914,11 +970,13 @@ async def cmd_damn(interaction: discord.Interaction) -> None:
             "❌ You need the **Music Manager** role.", ephemeral=True
         )
         return
-    bot._persona_mode = "day_cycle"
-    bot._sync_controller_mode_from_persona_mode()
-    bot._save_controller_state()
-    await bot._apply_branding_for_day()
-    await bot.refresh_controller_status()
+    switched = await bot._switch_persona_with_branding("day_cycle")
+    if not switched:
+        await interaction.response.send_message(
+            "⚠️ The veil would not shift. Something old and patient is resisting the change.",
+            ephemeral=True,
+        )
+        return
     await interaction.response.send_message(await bot._state_announcement())
 
 
@@ -929,11 +987,13 @@ async def cmd_save(interaction: discord.Interaction) -> None:
             "❌ You need the **Music Manager** role.", ephemeral=True
         )
         return
-    bot._persona_mode = "forced_heaven"
-    bot._sync_controller_mode_from_persona_mode()
-    bot._save_controller_state()
-    await bot._apply_branding_for_day()
-    await bot.refresh_controller_status()
+    switched = await bot._switch_persona_with_branding("forced_heaven")
+    if not switched:
+        await interaction.response.send_message(
+            "⚠️ The veil would not shift. Something old and patient is resisting the change.",
+            ephemeral=True,
+        )
+        return
     await interaction.response.send_message(await bot._state_announcement())
 
 
@@ -969,7 +1029,7 @@ class PurgeSongsConfirmModal(discord.ui.Modal, title="Confirm Full Song Purge"):
         deleted = purge_all_songs()
         deleted_files = 0
         for p in SONGS_DIR.iterdir():
-            if p.is_file():
+            if p.is_file() and p.name != ".gitkeep":
                 try:
                     p.unlink()
                     deleted_files += 1
