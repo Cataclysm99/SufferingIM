@@ -1,6 +1,4 @@
-"""
-media_utils.py – shared YouTube URL parsing and download helpers.
-"""
+"""media_utils.py – shared YouTube URL parsing and download helpers."""
 from __future__ import annotations
 
 import re
@@ -22,17 +20,13 @@ _YOUTUBE_HOSTS = {
 
 
 def extract_urls(text: str) -> list[str]:
+    """Extract URL-like substrings from free-form text."""
     return _URL_RE.findall(text or "")
 
 
 def is_youtube_url(url: str) -> bool:
-    host = (
-        url.split("://", 1)[-1]
-        .split("/", 1)[0]
-        .split(":", 1)[0]
-        .lower()
-        .strip()
-    )
+    """Return True when the URL host belongs to YouTube."""
+    host = url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower().strip()
     return host in _YOUTUBE_HOSTS
 
 
@@ -41,13 +35,8 @@ def download_youtube_audio(
     target_dir: Path,
     noplaylist: bool = False,
 ) -> tuple[list[Path], str | None]:
-    """Download audio from a YouTube URL.
-
-    Returns a tuple of ``(downloaded_paths, playlist_title)``.  *playlist_title*
-    is the YouTube playlist name when the URL points to a playlist, otherwise
-    ``None``.
-    """
-    before = {p.name for p in target_dir.iterdir() if p.is_file()}
+    """Download audio from a YouTube URL and return downloaded files plus playlist title."""
+    before = {path.name for path in target_dir.iterdir() if path.is_file()}
     ydl_opts = {
         "format": "bestaudio/best",
         "noplaylist": noplaylist,
@@ -63,12 +52,9 @@ def download_youtube_audio(
             playlist_title = info.get("title") or None
 
     added: list[Path] = []
-    for p in sorted(target_dir.iterdir()):
-        if not p.is_file():
+    for path in sorted(target_dir.iterdir()):
+        if not path.is_file() or path.name in before:
             continue
-        if p.name in before:
-            continue
-        if p.suffix.lower() not in ALLOWED_EXTENSIONS:
-            continue
-        added.append(p)
+        if path.suffix.lower() in ALLOWED_EXTENSIONS:
+            added.append(path)
     return added, playlist_title

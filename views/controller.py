@@ -10,13 +10,31 @@ import discord
 from database import get_all_songs
 
 from .modals import AddSongModal, DeleteSongByIdModal, DeleteSongModal
-from .permissions import is_music_manager
+from .permissions import require_music_manager
 from .song_list import SongListView
 
 log = logging.getLogger(__name__)
 
 
+async def _send_song_list(interaction: discord.Interaction) -> None:
+    """Send the paginated song list view in an ephemeral response."""
+    songs = get_all_songs()
+    if not songs:
+        await interaction.response.send_message("*No songs in the library yet.*", ephemeral=True)
+        return
+
+    view = SongListView(songs)
+    view.update_buttons()
+    await interaction.response.send_message(
+        embed=view.build_embed(),
+        view=view,
+        ephemeral=True,
+    )
+
+
 class MusicControlView(discord.ui.View):
+    """Full controller view used during normal playback mode."""
+
     def __init__(self) -> None:
         super().__init__(timeout=None)
         self._play_resume_lock = asyncio.Lock()
@@ -27,6 +45,7 @@ class MusicControlView(discord.ui.View):
         error: Exception,
         item: discord.ui.Item[discord.ui.View],
     ) -> None:
+        """Log button errors and try to notify the user."""
         log.error(
             "Unhandled controller view error (item=%s user_id=%s guild_id=%s)",
             getattr(item, "custom_id", None),
@@ -40,8 +59,8 @@ class MusicControlView(discord.ui.View):
                 await interaction.followup.send(msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
-        except Exception:
-            return
+        except discord.DiscordException:
+            log.debug("Could not send controller error message.")
 
     @discord.ui.button(
         label="▶ Play",
@@ -50,8 +69,11 @@ class MusicControlView(discord.ui.View):
         row=0,
     )
     async def play_resume(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
+        """Start playback or resume the paused voice client."""
         player = interaction.client.player  # type: ignore[attr-defined]
         async with self._play_resume_lock:
             if player.is_paused():
@@ -66,7 +88,8 @@ class MusicControlView(discord.ui.View):
                 return
             if not interaction.user.voice:  # type: ignore[union-attr]
                 await interaction.response.send_message(
-                    "❌ You must be in a voice channel first!", ephemeral=True
+                    "❌ You must be in a voice channel first!",
+                    ephemeral=True,
                 )
                 return
 
@@ -108,8 +131,11 @@ class MusicControlView(discord.ui.View):
         row=0,
     )
     async def pause(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
+        """Pause the current playback if a track is running."""
         player = interaction.client.player  # type: ignore[attr-defined]
         if player.pause():
             await interaction.response.send_message("⏸ Paused.", ephemeral=True)
@@ -126,8 +152,11 @@ class MusicControlView(discord.ui.View):
         row=0,
     )
     async def skip(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
+        """Skip the current track or intermission clip."""
         player = interaction.client.player  # type: ignore[attr-defined]
         if player.skip():
             await interaction.response.send_message("⏭ Skipped.", ephemeral=True)
@@ -143,8 +172,11 @@ class MusicControlView(discord.ui.View):
         row=0,
     )
     async def leave(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
+        """Disconnect the bot from voice and clear the controller state."""
         player = interaction.client.player  # type: ignore[attr-defined]
         if not player.is_connected():
             await interaction.response.send_message(
@@ -164,19 +196,12 @@ class MusicControlView(discord.ui.View):
         row=1,
     )
     async def song_list(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
-        songs = get_all_songs()
-        if not songs:
-            await interaction.response.send_message(
-                "*No songs in the library yet.*", ephemeral=True
-            )
-            return
-        view = SongListView(songs)
-        view._update_buttons()
-        await interaction.response.send_message(
-            embed=view._build_embed(), view=view, ephemeral=True
-        )
+        """Show the active playlist in a paginated ephemeral view."""
+        await _send_song_list(interaction)
 
     @discord.ui.button(
         label="➕ Add Song",
@@ -185,8 +210,11 @@ class MusicControlView(discord.ui.View):
         row=1,
     )
     async def add_song(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
+        """Open the add-song modal."""
         await interaction.response.send_modal(AddSongModal())
 
     @discord.ui.button(
@@ -196,12 +224,12 @@ class MusicControlView(discord.ui.View):
         row=1,
     )
     async def delete_song(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
-        if not is_music_manager(interaction):
-            await interaction.response.send_message(
-                "❌ You need the **Music Manager** role to delete songs.", ephemeral=True
-            )
+        """Open the delete-song modal for managers."""
+        if not await require_music_manager(interaction, action="delete songs"):
             return
         await interaction.response.send_modal(DeleteSongModal())
 
@@ -212,11 +240,13 @@ class MusicControlView(discord.ui.View):
         row=2,
     )
     async def like_current(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
-        ok, msg = await interaction.client.submit_current_song_feedback(  # type: ignore[attr-defined]
-            interaction, is_like=True
-        )
+        """Send positive feedback for the currently playing song."""
+        client = interaction.client  # type: ignore[attr-defined]
+        ok, msg = await client.submit_current_song_feedback(interaction, is_like=True)
         prefix = "👍" if ok else "❌"
         await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)
 
@@ -227,16 +257,20 @@ class MusicControlView(discord.ui.View):
         row=2,
     )
     async def dislike_current(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
-        ok, msg = await interaction.client.submit_current_song_feedback(  # type: ignore[attr-defined]
-            interaction, is_like=False
-        )
+        """Send negative feedback for the currently playing song."""
+        client = interaction.client  # type: ignore[attr-defined]
+        ok, msg = await client.submit_current_song_feedback(interaction, is_like=False)
         prefix = "👎" if ok else "❌"
         await interaction.response.send_message(f"{prefix} {msg}", ephemeral=True)
 
 
 class ShadyControlView(discord.ui.View):
+    """Limited controller view used for collector mode."""
+
     def __init__(self) -> None:
         super().__init__(timeout=None)
 
@@ -247,19 +281,12 @@ class ShadyControlView(discord.ui.View):
         row=0,
     )
     async def song_list(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
-        songs = get_all_songs()
-        if not songs:
-            await interaction.response.send_message(
-                "*No songs in the library yet.*", ephemeral=True
-            )
-            return
-        view = SongListView(songs)
-        view._update_buttons()
-        await interaction.response.send_message(
-            embed=view._build_embed(), view=view, ephemeral=True
-        )
+        """Show the active playlist in a paginated ephemeral view."""
+        await _send_song_list(interaction)
 
     @discord.ui.button(
         label="➕ Add Song",
@@ -268,8 +295,11 @@ class ShadyControlView(discord.ui.View):
         row=0,
     )
     async def add_song(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
+        """Open the add-song modal."""
         await interaction.response.send_modal(AddSongModal())
 
     @discord.ui.button(
@@ -279,12 +309,11 @@ class ShadyControlView(discord.ui.View):
         row=0,
     )
     async def disable_song(
-        self, interaction: discord.Interaction, button: discord.ui.Button
+        self,
+        interaction: discord.Interaction,
+        _button: discord.ui.Button,
     ) -> None:
-        if not is_music_manager(interaction):
-            await interaction.response.send_message(
-                "❌ You need the **Music Manager** role to disable songs.", ephemeral=True
-            )
+        """Open the disable-by-id modal for managers."""
+        if not await require_music_manager(interaction, action="disable songs"):
             return
         await interaction.response.send_modal(DeleteSongByIdModal())
-

@@ -15,7 +15,6 @@ from typing import Optional
 
 from config import ALLOWED_EXTENSIONS
 
-# Lowercase weekday names, Monday-first.
 DAYS: tuple[str, ...] = (
     "monday",
     "tuesday",
@@ -28,47 +27,51 @@ DAYS: tuple[str, ...] = (
 
 
 class DJEventScheduler:
-    """Selects intro/outro/hourly DJ event clips by weekday."""
+    """Select intro, outro, and hourly DJ event clips by weekday."""
 
     def __init__(self, dj_dir: Path) -> None:
         self.dj_dir = dj_dir
 
     @staticmethod
     def today_name() -> str:
+        """Return today's weekday name in lowercase."""
         return datetime.date.today().strftime("%A").lower()
 
     def _day_files(self, day: str) -> list[Path]:
+        """Return supported media files for the given weekday folder."""
         day_dir = self.dj_dir / day
         if not day_dir.is_dir():
             return []
         return [
-            f
-            for f in day_dir.iterdir()
-            if f.is_file() and f.suffix.lower() in ALLOWED_EXTENSIONS
+            file_path
+            for file_path in day_dir.iterdir()
+            if file_path.is_file() and file_path.suffix.lower() in ALLOWED_EXTENSIONS
         ]
 
     def intro_clip(self, day: str | None = None) -> Optional[Path]:
+        """Return the intro clip for the requested day, if present."""
         day = day or self.today_name()
-        for f in self._day_files(day):
-            if f.stem.lower() == "intro":
-                return f
+        for file_path in self._day_files(day):
+            if file_path.stem.lower() == "intro":
+                return file_path
         return None
 
     def outro_clip(self, day: str | None = None) -> Optional[Path]:
+        """Return the outro clip for the requested day, if present."""
         day = day or self.today_name()
-        for f in self._day_files(day):
-            if f.stem.lower() == "outro":
-                return f
+        for file_path in self._day_files(day):
+            if file_path.stem.lower() == "outro":
+                return file_path
         return None
 
     def random_hourly_clip(self, day: str | None = None) -> Optional[Path]:
+        """Return a random non-intro and non-outro clip for the requested day."""
         day = day or self.today_name()
         pool = [
-            f
-            for f in self._day_files(day)
-            if f.stem.lower() not in {"intro", "outro"}
+            file_path
+            for file_path in self._day_files(day)
+            if file_path.stem.lower() not in {"intro", "outro"}
         ]
         if not pool:
             return None
         return random.choice(pool)
-

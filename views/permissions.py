@@ -16,4 +16,19 @@ def is_music_manager(interaction: discord.Interaction) -> bool:
         return False
     if member.guild_permissions.administrator:
         return True
-    return any(r.id == MUSIC_MANAGER_ROLE_ID for r in member.roles)
+    return any(role.id == MUSIC_MANAGER_ROLE_ID for role in member.roles)
+
+
+async def require_music_manager(
+    interaction: discord.Interaction,
+    *,
+    action: str = "manage the song library",
+) -> bool:
+    """Ensure the interacting user has music-manager access."""
+    if is_music_manager(interaction):
+        return True
+    await interaction.response.send_message(
+        f"❌ You need the **Music Manager** role to {action}.",
+        ephemeral=True,
+    )
+    return False
