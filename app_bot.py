@@ -102,7 +102,6 @@ class _BotVisualState:
     branding_task: asyncio.Task[None] | None = None
     controller_song: dict | None = None
     controller_label: str | None = None
-    startup_state_announcement_sent: bool = False
 
 
 class BrandingRateLimitError(RuntimeError):
@@ -273,24 +272,29 @@ class MusicBot(commands.Bot):
         self.player.set_dj_events(DJEventScheduler(DJ_EVENTS_DIR))
 
         try:
-            await self._apply_branding_for_day()
+            await self._apply_branding_for_day(force=True)
         except (BrandingRateLimitError, discord.DiscordException, OSError, ValueError) as exc:
             log.warning("Initial branding apply failed: %s", exc)
         if self.state.branding_task is None or self.state.branding_task.done():
             self.state.branding_task = asyncio.create_task(self._branding_loop())
 
         self.player.on_track_start = self.update_controller_now_playing
+        await self.announce_state(channel=self._controller_text_channel())
         await self._ensure_controller()
-        if not self.state.startup_state_announcement_sent:
-            await self.announce_state(channel=None)
-            self.state.startup_state_announcement_sent = True
+
+    def _controller_text_channel(self) -> discord.TextChannel | None:
+        """Return the configured controller channel when available."""
+        if not CONTROLLER_CHANNEL_ID:
+            return None
+        channel = self.get_channel(CONTROLLER_CHANNEL_ID)
+        if not isinstance(channel, discord.TextChannel):
+            return None
+        return channel
 
     async def _ensure_controller(self) -> None:
         """Recreate the persistent controller message in the configured channel."""
-        if not CONTROLLER_CHANNEL_ID:
-            return
-        channel = self.get_channel(CONTROLLER_CHANNEL_ID)
-        if not isinstance(channel, discord.TextChannel):
+        channel = self._controller_text_channel()
+        if channel is None:
             return
         stale_controllers: list[discord.Message] = []
         async for message in channel.history(limit=CONTROLLER_SEARCH_LIMIT):
@@ -346,12 +350,12 @@ class MusicBot(commands.Bot):
         }
         return branding_map[target]
 
-    async def _apply_branding_for_day(self) -> None:
+    async def _apply_branding_for_day(self, force: bool = False) -> None:
         """Apply the correct persona branding when the target mode changes."""
         if self.user is None:
             return
         target = self._branding_target()
-        if target == self.state.branding_mode:
+        if not force and target == self.state.branding_mode:
             return
 
         username, avatar, banner = self._branding_assets(target)
