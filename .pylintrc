@@ -1,5 +1,5 @@
 [MASTER]
-ignore=.venv
+ignore-paths=^venv/
 
 [FORMAT]
 max-line-length=100
