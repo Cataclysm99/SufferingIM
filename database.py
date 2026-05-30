@@ -291,9 +291,14 @@ def apply_song_feedback(song_id: int, user_id: int, is_like: bool) -> tuple[bool
                     "You've already given feedback recently. "
                     f"Try again in about {minutes} minute(s).",
                 )
-        conn.execute("DELETE FROM vote_cooldowns WHERE user_id = ?", (uid,))
         conn.execute(
-            "INSERT INTO vote_cooldowns (user_id, song_id, voted_at) VALUES (?, ?, ?)",
+            """
+            INSERT INTO vote_cooldowns (user_id, song_id, voted_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                song_id = excluded.song_id,
+                voted_at = excluded.voted_at
+            """,
             (uid, song_id, now),
         )
 
