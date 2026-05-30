@@ -510,7 +510,7 @@ def _register_search_and_playlist_commands(bot: MusicBot) -> None:
     )
     @app_commands.describe(
         field="Field to search by",
-        query="Search term (for Added By, enter a Discord user ID)",
+        query="Search term; use a Discord user ID when the Added By field is selected",
     )
     @app_commands.choices(
         field=[
