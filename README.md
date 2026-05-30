@@ -151,7 +151,7 @@ On every transition to next track:
 - `/set_rigged_pool` (Music Manager, comma-separated IDs)
 - `/play_dj_event` (Music Manager, optional day or broadcast ID)
 - `/like`, `/dislike`
-- `!sync` – sync global slash commands and force-refresh this server's command set
+- `!sync` – sync global slash commands and clear server-specific duplicate overrides
   (Manage Server)
 
 Buttons mirror the same core actions.

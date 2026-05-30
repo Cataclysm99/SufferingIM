@@ -255,7 +255,7 @@ def _help_manager_tutorial_embed() -> discord.Embed:
     embed.add_field(
         name="Command rollout + troubleshooting",
         value=(
-            "**`!sync`** — sync global commands and force-refresh this server's command set.\n"
+            "**`!sync`** — sync global commands and clear this server's duplicate overrides.\n"
             "If a command asks for IDs, run **`/playlist_all`** first and copy the ID column."
         ),
         inline=False,
@@ -290,7 +290,7 @@ def _unique_path(directory: Path, filename: str) -> Path:
 @commands.command(name="sync")
 @commands.guild_only()
 async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
-    """Publish global commands and mirror them to this guild immediately."""
+    """Publish global commands and remove guild-specific command duplicates."""
     author = ctx.author
     if not isinstance(author, discord.Member) or not author.guild_permissions.manage_guild:
         await ctx.reply(
@@ -301,8 +301,8 @@ async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
 
     try:
         synced = await ctx.bot.tree.sync()
-        ctx.bot.tree.copy_global_to(guild=ctx.guild)
-        guild_synced = await ctx.bot.tree.sync(guild=ctx.guild)
+        ctx.bot.tree.clear_commands(guild=ctx.guild)
+        cleared_guild = await ctx.bot.tree.sync(guild=ctx.guild)
     except discord.DiscordException as exc:
         log.warning(
             "Slash-command sync failed for %s (%s): %s",
@@ -317,16 +317,17 @@ async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
         return
 
     log.info(
-        "Synced %d global command(s) and mirrored %d into guild %s (requester=%s)",
+        "Synced %d global command(s) and cleared %d guild override command(s) in %s "
+        "(requester=%s)",
         len(synced),
-        len(guild_synced),
+        len(cleared_guild),
         getattr(ctx.guild, "id", "unknown"),
         author.id,
     )
     await ctx.reply(
         "✅ Synced **"
-        f"{len(synced)}** global slash command(s) and refreshed **{len(guild_synced)}** "
-        "command(s) in this server immediately.",
+        f"{len(synced)}** global slash command(s) and cleared **{len(cleared_guild)}** "
+        "server-specific override command(s) to prevent duplicates.",
         mention_author=False,
     )
 
