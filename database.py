@@ -177,7 +177,7 @@ _FIELD_SEARCH_QUERIES: dict[str, str] = {
 
 
 def search_songs(field: str, query: str) -> list[dict]:
-    """Search active songs by supported field name."""
+    """Search songs by supported field name. ID queries include disabled songs."""
     if field not in SEARCHABLE_FIELDS:
         return []
     with _get_conn() as conn:
@@ -187,7 +187,7 @@ def search_songs(field: str, query: str) -> list[dict]:
             except ValueError:
                 return []
             rows = conn.execute(
-                "SELECT * FROM songs WHERE id = ? AND available = 1",
+                "SELECT * FROM songs WHERE id = ?",
                 (song_id,),
             ).fetchall()
         else:

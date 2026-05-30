@@ -38,9 +38,9 @@ from views import (
     REACT_CANCEL,
     REACT_DEACTIVATE,
     REACT_HARD_DELETE,
-    SongListView,
     _build_delete_confirm_message,
     _get_song_or_respond_missing,
+    _resolve_username,
     _song_table_embed,
     is_music_manager,
     require_music_manager,
@@ -508,12 +508,15 @@ def _register_search_and_playlist_commands(bot: MusicBot) -> None:
     @bot.tree.command(
         name="search", description="Search songs by name, artist, uploader, or id."
     )
-    @app_commands.describe(field="Field", query="Search term")
+    @app_commands.describe(
+        field="Field to search by",
+        query="Search term (for Added By, enter a Discord user ID)",
+    )
     @app_commands.choices(
         field=[
             app_commands.Choice(name="Name", value="name"),
             app_commands.Choice(name="Artist", value="artist"),
-            app_commands.Choice(name="Added By (user ID)", value="added_by"),
+            app_commands.Choice(name="Added By", value="added_by"),
             app_commands.Choice(name="ID", value="id"),
         ]
     )
@@ -529,15 +532,18 @@ def _register_search_and_playlist_commands(bot: MusicBot) -> None:
                 ephemeral=True,
             )
             return
-        result_view = SongListView(results)
-        result_view.update_buttons()
-        embed = result_view.build_embed()
-        embed.title = f'🔎 Results: {field.name} = "{query}"'
-        await interaction.response.send_message(
-            embed=embed,
-            view=result_view,
-            ephemeral=True,
+        display_query = query
+        if field.value == "added_by":
+            display_query = await _resolve_username(
+                interaction.client, query, interaction.guild
+            )
+        embed = await _song_table_embed(
+            results,
+            title=f'🔎 Results: {field.name}: "{display_query}"',
+            client=interaction.client,
+            guild=interaction.guild,
         )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(name="playlist", description="Show the playlist collection.")
     async def cmd_playlist(interaction: discord.Interaction) -> None:

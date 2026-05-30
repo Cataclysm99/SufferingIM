@@ -324,12 +324,7 @@ async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
         getattr(ctx.guild, "id", "unknown"),
         author.id,
     )
-    message = (
-        f"✅ Synced **{len(synced)}** global slash command(s) and cleared "
-        f"**{len(cleared_guild)}** server-specific override command(s) "
-        "to prevent duplicates."
-    )
-    await ctx.reply(message, mention_author=False)
+    await ctx.message.add_reaction("✅")
 
 
 class MusicBot(commands.Bot):
