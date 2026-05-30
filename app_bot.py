@@ -42,6 +42,7 @@ from database import (
 from player import MusicPlayer
 from views import (
     CONTROLLER_SEARCH_LIMIT,
+    REACT_CANCEL,
     REACT_DEACTIVATE,
     REACT_HARD_DELETE,
     MusicControlView,
@@ -237,7 +238,7 @@ def _help_manager_tutorial_embed() -> discord.Embed:
             "**`/playlist_all`** — full song list including disabled entries.\n"
             "**`/ad_list`** / **`/broadcast_list`** — view ad and DJ libraries.\n"
             "**`/toggle_song`** / **`/toggle_song_id`** — enable or disable songs.\n"
-            "**`/delete_song_id`** — react-confirmed delete flow for a song by ID."
+            "**`/delete_song_id`** — react-confirmed flow (✅ disable / 🗑️ delete / 🚫 cancel)."
         ),
         inline=False,
     )
@@ -254,8 +255,7 @@ def _help_manager_tutorial_embed() -> discord.Embed:
     embed.add_field(
         name="Command rollout + troubleshooting",
         value=(
-            "**`!sync`** — clear this server's temporary slash overrides and re-sync "
-            "global commands.\n"
+            "**`!sync`** — sync global commands and force-refresh this server's command set.\n"
             "If a command asks for IDs, run **`/playlist_all`** first and copy the ID column."
         ),
         inline=False,
@@ -290,7 +290,7 @@ def _unique_path(directory: Path, filename: str) -> Path:
 @commands.command(name="sync")
 @commands.guild_only()
 async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
-    """Clear guild overrides so this guild falls back to one global slash-command set."""
+    """Publish global commands and mirror them to this guild immediately."""
     author = ctx.author
     if not isinstance(author, discord.Member) or not author.guild_permissions.manage_guild:
         await ctx.reply(
@@ -300,9 +300,9 @@ async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
         return
 
     try:
-        ctx.bot.tree.clear_commands(guild=ctx.guild)
-        cleared = await ctx.bot.tree.sync(guild=ctx.guild)
         synced = await ctx.bot.tree.sync()
+        ctx.bot.tree.copy_global_to(guild=ctx.guild)
+        guild_synced = await ctx.bot.tree.sync(guild=ctx.guild)
     except discord.DiscordException as exc:
         log.warning(
             "Slash-command sync failed for %s (%s): %s",
@@ -317,15 +317,16 @@ async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
         return
 
     log.info(
-        "Cleared %d guild app command(s) and synced %d global commands (requester=%s, guild=%s)",
-        len(cleared),
+        "Synced %d global command(s) and mirrored %d into guild %s (requester=%s)",
         len(synced),
-        author.id,
+        len(guild_synced),
         getattr(ctx.guild, "id", "unknown"),
+        author.id,
     )
     await ctx.reply(
-        "✅ Cleared temporary server command overrides "
-        f"(**{len(cleared)}** removed) and synced **{len(synced)}** global slash command(s).",
+        "✅ Synced **"
+        f"{len(synced)}** global slash command(s) and refreshed **{len(guild_synced)}** "
+        "command(s) in this server immediately.",
         mention_author=False,
     )
 
@@ -724,6 +725,12 @@ class MusicBot(commands.Bot):
                     "has been permanently deleted."
                 )
             )
+            await message.clear_reactions()
+            del self.pending_deletes[payload.message_id]
+            return
+
+        if emoji == REACT_CANCEL:
+            await message.edit(content="🚫 Delete action canceled.")
             await message.clear_reactions()
             del self.pending_deletes[payload.message_id]
 

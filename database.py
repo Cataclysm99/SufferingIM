@@ -72,12 +72,14 @@ def init_db() -> None:
                 user_id  TEXT    NOT NULL,
                 song_id  INTEGER NOT NULL,
                 voted_at REAL    NOT NULL,
-                PRIMARY KEY (user_id, song_id)
+                PRIMARY KEY (user_id)
             )
             """)
         _ensure_column(conn, "ads", "name", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "ads", "sponsor", "TEXT NOT NULL DEFAULT 'Unknown'")
         _ensure_column(conn, "ads", "added_by", "TEXT NOT NULL DEFAULT ''")
+        _ensure_vote_cooldown_user_uniqueness(conn)
+        _purge_reserved_media_rows(conn)
         conn.commit()
 
 
@@ -93,6 +95,33 @@ def _ensure_column(
     if column in existing:
         return
     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _ensure_vote_cooldown_user_uniqueness(conn: sqlite3.Connection) -> None:
+    """Keep only one cooldown row per user and enforce that uniqueness."""
+    conn.execute(
+        """
+        DELETE FROM vote_cooldowns
+        WHERE rowid NOT IN (
+            SELECT MAX(rowid)
+            FROM vote_cooldowns
+            GROUP BY user_id
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_vote_cooldowns_user_id
+        ON vote_cooldowns(user_id)
+        """
+    )
+
+
+def _purge_reserved_media_rows(conn: sqlite3.Connection) -> None:
+    """Delete placeholder/hidden media filenames from all media tables."""
+    reserved_filter = "TRIM(filename) = '' OR LTRIM(filename) LIKE '.%'"
+    for table in ("songs", "ads", "broadcasts"):
+        conn.execute(f"DELETE FROM {table} WHERE {reserved_filter}")
 
 
 # ---------------------------------------------------------------------------
@@ -245,13 +274,13 @@ def get_songs_by_ids(song_ids: list[int]) -> list[dict]:
 
 
 def apply_song_feedback(song_id: int, user_id: int, is_like: bool) -> tuple[bool, str]:
-    """Apply per-song feedback with a one-hour per-user cooldown."""
+    """Apply feedback with a one-hour per-user cooldown."""
     now = time.time()
     uid = str(user_id)
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT voted_at FROM vote_cooldowns WHERE user_id = ? AND song_id = ?",
-            (uid, song_id),
+            "SELECT voted_at FROM vote_cooldowns WHERE user_id = ?",
+            (uid,),
         ).fetchone()
         if row is not None:
             elapsed = now - float(row["voted_at"])
@@ -259,18 +288,14 @@ def apply_song_feedback(song_id: int, user_id: int, is_like: bool) -> tuple[bool
                 minutes = int((3600 - elapsed) // 60) + 1
                 return (
                     False,
-                    "You've already given feedback for this song. "
+                    "You've already given feedback recently. "
                     f"Try again in about {minutes} minute(s).",
                 )
-            conn.execute(
-                "UPDATE vote_cooldowns SET voted_at = ? WHERE user_id = ? AND song_id = ?",
-                (now, uid, song_id),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO vote_cooldowns (user_id, song_id, voted_at) VALUES (?, ?, ?)",
-                (uid, song_id, now),
-            )
+        conn.execute("DELETE FROM vote_cooldowns WHERE user_id = ?", (uid,))
+        conn.execute(
+            "INSERT INTO vote_cooldowns (user_id, song_id, voted_at) VALUES (?, ?, ?)",
+            (uid, song_id, now),
+        )
 
         delta = -1 if is_like else 1
         conn.execute(
@@ -335,6 +360,9 @@ def sync_ads_from_disk() -> None:
         if path.is_file() and not _is_reserved_media_filename(path.name)
     )
     with _get_conn() as conn:
+        conn.execute(
+            "DELETE FROM ads WHERE TRIM(filename) = '' OR LTRIM(filename) LIKE '.%'"
+        )
         for filename in files:
             stem = Path(filename).stem
             conn.execute(
@@ -425,8 +453,11 @@ def sync_broadcasts_from_disk() -> None:
     """Ensure all DJ event files are represented in the broadcasts table."""
     DJ_EVENTS_DIR.mkdir(parents=True, exist_ok=True)
     with _get_conn() as conn:
+        conn.execute(
+            "DELETE FROM broadcasts WHERE TRIM(filename) = '' OR LTRIM(filename) LIKE '.%'"
+        )
         for day_dir in sorted(DJ_EVENTS_DIR.iterdir(), key=lambda path: path.name):
-            if not day_dir.is_dir():
+            if not day_dir.is_dir() or day_dir.name.startswith("."):
                 continue
             day = _normalized_day(day_dir.name)
             for path in sorted(day_dir.iterdir(), key=lambda file_path: file_path.name):

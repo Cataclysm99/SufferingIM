@@ -13,6 +13,7 @@ from .constants import (
     COL_ARTIST,
     COL_ID,
     COL_NAME,
+    REACT_CANCEL,
     REACT_DEACTIVATE,
     REACT_HARD_DELETE,
 )
@@ -68,6 +69,7 @@ async def _build_delete_confirm_message(
         f"(re-enable later with `/toggle_song` or `/toggle_song_id`).\n"
         f"React with {REACT_HARD_DELETE} to **permanently delete** "
         f"— removes from the database **and** deletes the audio file.\n\n"
+        f"React with {REACT_CANCEL} to **cancel** this action.\n\n"
         f"Only <@{requester_id}> can confirm this action."
     )
 

@@ -118,7 +118,7 @@ On every transition to next track:
 ### Feedback model
 - 👍 **Like** a song: `vote_score -= 1` — if score goes negative the song is suppressed and won't play until the next DJ cycle reset
 - 👎 **Dislike** a song: `vote_score += 1` — if score goes positive the song gets maximum selection probability
-- Cooldown: **one vote per user per song per hour** — a user may vote on many different songs in the same hour, but cannot vote on the same song twice within the hour
+- Cooldown: **one vote per user per hour** — each new vote replaces that user's prior cooldown row
 - Votes are cast via `/like` / `/dislike` commands or the 👍/👎 controller buttons
 - Cycle reset (DJ outro → restart) resets all negative `vote_score` values back to 0
 
@@ -132,7 +132,7 @@ On every transition to next track:
   - `songs` (includes `vote_score` field)
   - `ads` (name/sponsor/uploader/play counters)
   - `broadcasts` (day/slot/name/sponsor/uploader/play counters)
-  - `vote_cooldowns` (composite PK: user_id + song_id)
+  - `vote_cooldowns` (unique user_id cooldown tracking)
 
 ---
 
@@ -147,11 +147,11 @@ On every transition to next track:
 - `/playlist`, `/playlist_all`, `/search`
 - `/ad_list`, `/broadcast_list` (Music Manager)
 - `/toggle_song`, `/toggle_song_id` (Music Manager)
-- `/delete_song_id` (Music Manager, reaction-confirmed)
+- `/delete_song_id` (Music Manager, reaction-confirmed: ✅ deactivate / 🗑️ delete / 🚫 cancel)
 - `/set_rigged_pool` (Music Manager, comma-separated IDs)
 - `/play_dj_event` (Music Manager, optional day or broadcast ID)
 - `/like`, `/dislike`
-- `!sync` – clear server-specific slash overrides and re-sync global slash commands
+- `!sync` – sync global slash commands and force-refresh this server's command set
   (Manage Server)
 
 Buttons mirror the same core actions.

@@ -14,6 +14,7 @@ CONTROLLER_SEARCH_LIMIT = 100
 # Reaction emojis used by the legacy `/delete_song_id` confirmation flow.
 REACT_DEACTIVATE = "✅"
 REACT_HARD_DELETE = "🗑️"
+REACT_CANCEL = "🚫"
 
 # Song list pagination size.
 SONGS_PER_PAGE = 20

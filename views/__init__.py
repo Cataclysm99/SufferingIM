@@ -1,6 +1,11 @@
 """Public exports for the modularized views package."""
 
-from .constants import CONTROLLER_SEARCH_LIMIT, REACT_DEACTIVATE, REACT_HARD_DELETE
+from .constants import (
+    CONTROLLER_SEARCH_LIMIT,
+    REACT_CANCEL,
+    REACT_DEACTIVATE,
+    REACT_HARD_DELETE,
+)
 from .controller import MusicControlView, ShadyControlView
 from .helpers import (
     _build_delete_confirm_message,
@@ -19,6 +24,7 @@ __all__ = [
     "DeleteSongByIdModal",
     "DeleteSongModal",
     "MusicControlView",
+    "REACT_CANCEL",
     "REACT_DEACTIVATE",
     "REACT_HARD_DELETE",
     "ShadyControlView",

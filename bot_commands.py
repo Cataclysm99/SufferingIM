@@ -35,6 +35,7 @@ from database import (
 )
 from media_utils import download_youtube_audio, extract_urls, is_youtube_url
 from views import (
+    REACT_CANCEL,
     REACT_DEACTIVATE,
     REACT_HARD_DELETE,
     SongListView,
@@ -92,7 +93,7 @@ class PurgeSongsConfirmModal(discord.ui.Modal, title="Confirm Full Song Purge"):
         deleted = purge_all_songs()
         deleted_files = 0
         for path in SONGS_DIR.iterdir():
-            if not path.is_file() or path.name == ".gitkeep":
+            if not path.is_file() or path.name.startswith("."):
                 continue
             try:
                 path.unlink()
@@ -540,7 +541,11 @@ def _register_search_and_playlist_commands(bot: MusicBot) -> None:
 
     @bot.tree.command(name="playlist", description="Show the playlist collection.")
     async def cmd_playlist(interaction: discord.Interaction) -> None:
-        embed = await _song_table_embed(get_all_songs(), compact=True)
+        embed = await _song_table_embed(
+            get_all_songs(),
+            client=interaction.client,
+            guild=interaction.guild,
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(
@@ -638,6 +643,7 @@ def _register_song_management_commands(bot: MusicBot) -> None:
         message = await interaction.original_response()
         await message.add_reaction(REACT_DEACTIVATE)
         await message.add_reaction(REACT_HARD_DELETE)
+        await message.add_reaction(REACT_CANCEL)
         bot.pending_deletes[message.id] = {"user_id": interaction.user.id, "song": song}
 
 
