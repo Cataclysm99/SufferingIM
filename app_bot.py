@@ -6,7 +6,6 @@ import datetime
 import json
 import logging
 import random
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +37,7 @@ from database import (
     hard_delete_song,
     init_db,
     sync_ads_from_disk,
+    sync_broadcasts_from_disk,
 )
 from player import MusicPlayer
 from views import (
@@ -116,9 +116,15 @@ def _controller_embed(state: _ControllerEmbedState) -> discord.Embed:
     )
     status = "⏸ Paused" if state.is_paused else "▶ Playing"
     if state.song:
+        sponsor = state.song.get("sponsor")
+        if sponsor:
+            now_playing_line = f"**{state.song['name']}** — sponsored by **{sponsor}**"
+        else:
+            artist = state.song.get("artist", "Unknown")
+            now_playing_line = f"**{state.song['name']}** — **{artist}**"
         embed.add_field(
             name=status,
-            value=f"**{state.song['name']}** — **{state.song['artist']}**",
+            value=now_playing_line,
             inline=False,
         )
         embed.add_field(name="Added by", value=state.added_by or "Unknown", inline=False)
@@ -137,17 +143,28 @@ def _controller_embed(state: _ControllerEmbedState) -> discord.Embed:
     return embed
 
 
-def _shady_controller_embed(colour: discord.Colour | None = None) -> discord.Embed:
+def _shady_controller_embed(state: _ControllerEmbedState) -> discord.Embed:
     """Build the collector-mode controller embed."""
-    return discord.Embed(
+    embed = discord.Embed(
         title=f"🕶️ {COLLECTOR_BOT_NAME}",
         description=(
             "Drop songs here and keep the stash growing.\n"
             "Use **➕ Add Song** to feed the vault, **📋 Playlist** to inspect the haul, "
             "and **⛔ Disable Song** to bury tracks."
         ),
-        colour=colour or discord.Colour.purple(),
+        colour=state.colour or discord.Colour.purple(),
     )
+    status = "⏸ Paused" if state.is_paused else "▶ Playing"
+    if state.song:
+        sponsor = state.song.get("sponsor")
+        if sponsor:
+            value = f"**{state.song['name']}** — sponsored by **{sponsor}**"
+        else:
+            value = f"**{state.song['name']}** — **{state.song.get('artist', 'Unknown')}**"
+        embed.add_field(name=status, value=value, inline=False)
+    elif state.label:
+        embed.add_field(name=status, value=f"🎵 {state.label.title()}", inline=False)
+    return embed
 
 
 def _help_tutorial_embed() -> discord.Embed:
@@ -169,14 +186,14 @@ def _help_tutorial_embed() -> discord.Embed:
         name="2) Browse songs",
         value=(
             "Use **📋 Playlist** on the controller for the active song list.\n"
-            "Slash commands: **`/songs`**, **`/songs_all`** (Manager), **`/search`**."
+            "Slash commands: **`/playlist`** and **`/search`**."
         ),
         inline=False,
     )
     embed.add_field(
-        name="3) Check the current track / send feedback",
+        name="3) Current track / feedback",
         value=(
-            "Use **`/now_playing`** to see the current song.\n"
+            "The controller always shows what's currently playing.\n"
             "Send feedback with **👍 / 👎** buttons or **`/like`** / **`/dislike`**."
         ),
         inline=False,
@@ -190,14 +207,30 @@ def _help_tutorial_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="5) Manager tools",
+        name="5) More help",
+        value="Managers can use **`/helpless_manager`** for advanced management docs.",
+        inline=False,
+    )
+    embed.set_footer(text="Some buttons require the Music Manager role.")
+    return embed
+
+
+def _help_manager_tutorial_embed() -> discord.Embed:
+    """Build the manager-focused help/tutorial embed sent through DMs."""
+    embed = _help_tutorial_embed()
+    embed.title = "🎛️ SufferingFM Manager Guide"
+    embed.description = "Extended command guide for Music Managers."
+    embed.add_field(
+        name="Manager command set",
         value=(
+            "**`/upload_song`**, **`/upload_ad`**, **`/upload_broadcast`**,\n"
+            "**`/playlist_all`**, **`/ad_list`**, **`/broadcast_list`**,\n"
             "**`/toggle_song`**, **`/toggle_song_id`**, **`/delete_song_id`**,\n"
-            "**`/set_rigged_pool`**, **`/play_dj_event`**."
+            "**`/set_rigged_pool`**, **`/play_dj_event`**, **`/pardon`**, "
+            "**`/damn`**, **`/save`**, **`/purge_songs`**."
         ),
         inline=False,
     )
-    embed.set_footer(text="Some commands/buttons require the Music Manager role.")
     return embed
 
 
@@ -224,21 +257,6 @@ def _unique_path(directory: Path, filename: str) -> Path:
     return candidate
 
 
-def _infer_target(source: str | None, selected: str | None) -> str:
-    """Infer whether an upload should land in the song or ad library."""
-    if selected in {"song", "ad"}:
-        return selected
-    if source:
-        match = re.search(
-            r"\b(?:target|type|kind)\s*:\s*(song|ad)\b",
-            source,
-            flags=re.IGNORECASE,
-        )
-        if match:
-            return match.group(1).lower()
-    return "song"
-
-
 class MusicBot(commands.Bot):
     """Discord bot coordinating playback, controller views, and persona branding."""
 
@@ -249,7 +267,6 @@ class MusicBot(commands.Bot):
         self.state = _BotVisualState()
         self.controller_message: discord.Message | None = None
         self.purge_code: str | None = None
-        self.purge_code_expiry: float = 0.0
 
     async def setup_hook(self) -> None:
         """Register persistent views and sync the application command tree."""
@@ -262,6 +279,7 @@ class MusicBot(commands.Bot):
         log.info("Logged in as %s (id=%s)", self.user, self.user.id)  # type: ignore[union-attr]
         init_db()
         sync_ads_from_disk()
+        sync_broadcasts_from_disk()
         self.player.set_rigged_songs(list(RIGGED_SONG_IDS))
         self._load_controller_state()
         self._sync_controller_mode_from_persona_mode()
@@ -449,10 +467,10 @@ class MusicBot(commands.Bot):
 
     def active_controller_embed(self) -> discord.Embed:
         """Return the controller embed matching the current mode and playback state."""
-        colour = self._state_colour()
+        state = self._controller_embed_state()
         if self.state.controller_mode == "shady":
-            return _shady_controller_embed(colour=colour)
-        return _controller_embed(self._controller_embed_state())
+            return _shady_controller_embed(state)
+        return _controller_embed(state)
 
     def _state_key(self) -> str:
         """Return the current high-level persona key."""
@@ -549,17 +567,19 @@ class MusicBot(commands.Bot):
         """Refresh the persistent controller message with current playback state."""
         if self.controller_message is None:
             return
-        if self.state.controller_mode == "shady":
-            embed = _shady_controller_embed(colour=self._state_colour())
-        elif self.state.controller_song:
+        if self.state.controller_song:
             added_by = await _resolve_username(
                 self,
                 self.state.controller_song.get("added_by", ""),
                 self.controller_message.guild,
             )
-            embed = _controller_embed(self._controller_embed_state(added_by=added_by))
+            embed_state = self._controller_embed_state(added_by=added_by)
         else:
-            embed = _controller_embed(self._controller_embed_state())
+            embed_state = self._controller_embed_state()
+        if self.state.controller_mode == "shady":
+            embed = _shady_controller_embed(embed_state)
+        else:
+            embed = _controller_embed(embed_state)
 
         try:
             await self.controller_message.edit(

@@ -1,19 +1,11 @@
-"""
-broadcast.py – DJ event clip selection utilities.
-
-Folder layout:
-    dj_events/<weekday>/intro.*
-    dj_events/<weekday>/outro.*
-    dj_events/<weekday>/<other event clips>
-"""
+"""broadcast.py – DJ event clip selection utilities."""
 from __future__ import annotations
 
 import datetime
-import random
 from pathlib import Path
 from typing import Optional
 
-from config import ALLOWED_EXTENSIONS
+from database import get_broadcast_clip
 
 DAYS: tuple[str, ...] = (
     "monday",
@@ -37,41 +29,30 @@ class DJEventScheduler:
         """Return today's weekday name in lowercase."""
         return datetime.date.today().strftime("%A").lower()
 
-    def _day_files(self, day: str) -> list[Path]:
-        """Return supported media files for the given weekday folder."""
-        day_dir = self.dj_dir / day
-        if not day_dir.is_dir():
-            return []
-        return [
-            file_path
-            for file_path in day_dir.iterdir()
-            if file_path.is_file() and file_path.suffix.lower() in ALLOWED_EXTENSIONS
-        ]
-
-    def intro_clip(self, day: str | None = None) -> Optional[Path]:
-        """Return the intro clip for the requested day, if present."""
-        day = day or self.today_name()
-        for file_path in self._day_files(day):
-            if file_path.stem.lower() == "intro":
-                return file_path
-        return None
-
-    def outro_clip(self, day: str | None = None) -> Optional[Path]:
-        """Return the outro clip for the requested day, if present."""
-        day = day or self.today_name()
-        for file_path in self._day_files(day):
-            if file_path.stem.lower() == "outro":
-                return file_path
-        return None
-
-    def random_hourly_clip(self, day: str | None = None) -> Optional[Path]:
-        """Return a random non-intro and non-outro clip for the requested day."""
-        day = day or self.today_name()
-        pool = [
-            file_path
-            for file_path in self._day_files(day)
-            if file_path.stem.lower() not in {"intro", "outro"}
-        ]
-        if not pool:
+    def _clip(self, day: str, slot: str) -> Optional[dict]:
+        """Return one broadcast row for the given day and slot."""
+        clip = get_broadcast_clip(day, slot)
+        if clip is None:
             return None
-        return random.choice(pool)
+        clip["path"] = self.dj_dir / day / clip["filename"]
+        if not clip["path"].exists():
+            return None
+        return clip
+
+    def intro_clip(self, day: str | None = None) -> Optional[dict]:
+        """Return intro broadcast metadata for the requested day, if present."""
+        selected_day = day or self.today_name()
+        return self._clip(selected_day, "intro")
+
+    def outro_clip(self, day: str | None = None) -> Optional[dict]:
+        """Return outro broadcast metadata for the requested day, if present."""
+        selected_day = day or self.today_name()
+        return self._clip(selected_day, "outro")
+
+    def random_hourly_clip(self, day: str | None = None) -> Optional[dict]:
+        """Return random event broadcast metadata for the requested day."""
+        selected_day = day or self.today_name()
+        clip = self._clip(selected_day, "event")
+        if clip is None:
+            return None
+        return clip

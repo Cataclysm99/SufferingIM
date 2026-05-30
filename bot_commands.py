@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import secrets
 import string
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,11 +14,16 @@ import discord
 from discord import app_commands
 from yt_dlp.utils import DownloadError
 
-from app_bot import MusicBot, _help_tutorial_embed, _infer_target, _unique_path
-from config import ADS_DIR, ALLOWED_EXTENSIONS, SONGS_DIR
+from app_bot import MusicBot, _help_manager_tutorial_embed, _help_tutorial_embed, _unique_path
+from broadcast import DAYS as DJ_DAYS
+from config import ADS_DIR, ALLOWED_EXTENSIONS, DJ_EVENTS_DIR, SONGS_DIR
 from database import (
     activate_song,
+    add_ad,
+    add_broadcast,
     add_song,
+    get_all_ads_admin,
+    get_all_broadcasts_admin,
     deactivate_song,
     get_all_songs,
     get_all_songs_admin,
@@ -26,17 +31,20 @@ from database import (
     purge_all_songs,
     search_songs,
     sync_ads_from_disk,
+    sync_broadcasts_from_disk,
 )
 from media_utils import download_youtube_audio, extract_urls, is_youtube_url
 from views import (
     REACT_DEACTIVATE,
     REACT_HARD_DELETE,
+    SongListView,
     _build_delete_confirm_message,
     _get_song_or_respond_missing,
     _song_table_embed,
     is_music_manager,
     require_music_manager,
 )
+from views.helpers import _fit_rows_to_embed
 
 log = logging.getLogger(__name__)
 
@@ -47,9 +55,11 @@ class _UploadRequest:
 
     source: str | None
     file: discord.Attachment | None
-    raw_target: str
     name: str | None
-    artist: str | None
+    credit: str | None
+    kind: str
+    day: str | None = None
+    slot: str | None = None
 
 
 class PurgeSongsConfirmModal(discord.ui.Modal, title="Confirm Full Song Purge"):
@@ -64,9 +74,9 @@ class PurgeSongsConfirmModal(discord.ui.Modal, title="Confirm Full Song Purge"):
     async def on_submit(self, interaction: discord.Interaction, /) -> None:
         """Validate the password and purge all songs from disk and the database."""
         client = interaction.client  # type: ignore[attr-defined]
-        if not client.purge_code or time.time() > client.purge_code_expiry:
+        if not client.purge_code:
             await interaction.response.send_message(
-                "❌ The purge session has expired. Run `/purge_songs` again.",
+                "❌ No active purge session. Run `/purge_songs` again.",
                 ephemeral=True,
             )
             return
@@ -76,9 +86,8 @@ class PurgeSongsConfirmModal(discord.ui.Modal, title="Confirm Full Song Purge"):
                 ephemeral=True,
             )
             return
-
         client.purge_code = None
-        client.purge_code_expiry = 0.0
+        client.purge_code = None
         await interaction.response.defer(ephemeral=True)
 
         deleted = purge_all_songs()
@@ -113,22 +122,6 @@ def _attachment_extension(file: discord.Attachment | None) -> str:
     return "." + file.filename.rsplit(".", 1)[-1].lower()
 
 
-def _build_upload_request(
-    source: str | None,
-    file: discord.Attachment | None,
-    name: str | None,
-    artist: str | None,
-) -> _UploadRequest:
-    """Create a normalized upload request from slash-command arguments."""
-    return _UploadRequest(
-        source=source,
-        file=file,
-        raw_target=_infer_target(source, None),
-        name=name,
-        artist=artist,
-    )
-
-
 async def _validate_upload_request(
     interaction: discord.Interaction,
     request: _UploadRequest,
@@ -136,7 +129,7 @@ async def _validate_upload_request(
     """Validate permissions and upload inputs before starting work."""
     if not is_music_manager(interaction):
         await interaction.response.send_message(
-            "❌ You need the **Music Manager** role to upload songs.",
+            "❌ You need the **Music Manager** role to upload media.",
             ephemeral=True,
         )
         return False
@@ -162,17 +155,74 @@ async def _validate_upload_request(
     return True
 
 
+def _broadcast_target_day(request: _UploadRequest) -> str:
+    """Resolve the destination weekday for a broadcast upload."""
+    if request.day:
+        return request.day
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%A").lower()
+
+
+def _parse_broadcast_placement(placement: str | None) -> tuple[str | None, str | None]:
+    """Parse `day[:slot]` placement text for broadcast uploads."""
+    if not placement:
+        return None, None
+    chunks = [part.strip().lower() for part in placement.split(":", maxsplit=1)]
+    day = chunks[0] if chunks and chunks[0] in DJ_DAYS else None
+    slot = None
+    if len(chunks) == 2 and chunks[1] in {"intro", "outro", "event"}:
+        slot = chunks[1]
+    return day, slot
+
+
+def _target_dir(request: _UploadRequest) -> Path:
+    """Return the destination directory for upload storage."""
+    if request.kind == "song":
+        return SONGS_DIR
+    if request.kind == "ad":
+        return ADS_DIR
+    day_dir = DJ_EVENTS_DIR / _broadcast_target_day(request)
+    day_dir.mkdir(parents=True, exist_ok=True)
+    return day_dir
+
+
+def _store_media_record(
+    interaction: discord.Interaction,
+    request: _UploadRequest,
+    file_path: Path,
+    *,
+    fallback_credit: str | None = None,
+) -> int:
+    """Persist one uploaded media file in its database table and return record ID."""
+    display_name = (request.name or file_path.stem).strip() or file_path.stem
+    credit = (request.credit or fallback_credit or "Unknown").strip() or "Unknown"
+    added_by = str(interaction.user.id)
+    if request.kind == "song":
+        return add_song(display_name, credit, file_path.name, added_by)
+    if request.kind == "ad":
+        return add_ad(display_name, credit, file_path.name, added_by)
+    slot = (request.slot or "event").strip().lower()
+    return add_broadcast(
+        {
+            "name": display_name,
+            "sponsor": credit,
+            "added_by": added_by,
+            "day": _broadcast_target_day(request),
+            "slot": slot,
+            "filename": file_path.name,
+        }
+    )
+
+
 async def _store_downloaded_media(
     interaction: discord.Interaction,
     request: _UploadRequest,
-    target_dir: Path,
-) -> tuple[list[int], list[str], list[str], list[str]]:
+) -> tuple[list[int], list[str], list[str]]:
     """Download and store media from YouTube URLs."""
     urls = extract_urls(request.source or "")
     youtube_urls = [url for url in urls if is_youtube_url(url)]
-    added_song_ids: list[int] = []
-    added_ad_files: list[str] = []
+    inserted_ids: list[int] = []
     failed_urls: list[str] = []
+    target_dir = _target_dir(request)
 
     for url in youtube_urls:
         try:
@@ -188,70 +238,57 @@ async def _store_downloaded_media(
             continue
 
         for path in downloaded:
-            if request.raw_target == "song":
-                try:
-                    song_id = add_song(
-                        path.stem,
-                        playlist_title or "YouTube",
-                        path.name,
-                        str(interaction.user.id),
+            try:
+                inserted_ids.append(
+                    _store_media_record(
+                        interaction,
+                        request,
+                        path,
+                        fallback_credit=playlist_title if request.kind == "song" else None,
                     )
-                except ValueError:
-                    failed_urls.append(url)
-                    continue
-                added_song_ids.append(song_id)
-            else:
-                added_ad_files.append(path.name)
+                )
+            except ValueError:
+                failed_urls.append(url)
+                continue
 
     ignored_urls = [url for url in urls if url not in youtube_urls]
-    return added_song_ids, added_ad_files, ignored_urls, failed_urls
+    return inserted_ids, ignored_urls, failed_urls
 
 
 async def _store_uploaded_attachment(
     interaction: discord.Interaction,
     request: _UploadRequest,
-    target_dir: Path,
-) -> tuple[list[int], list[str], str | None]:
-    """Store an uploaded attachment in the song or ad library."""
+) -> tuple[list[int], str | None]:
+    """Store an uploaded attachment in the selected media library."""
     if request.file is None:
-        return [], [], None
+        return [], None
 
+    target_dir = _target_dir(request)
     destination = _unique_path(target_dir, request.file.filename)
     await request.file.save(destination)
-    if request.raw_target == "ad":
-        return [], [destination.name], None
-
-    display_name = (request.name or destination.stem).strip() or destination.stem
-    display_artist = (request.artist or "Unknown").strip() or "Unknown"
     try:
-        song_id = add_song(
-            display_name,
-            display_artist,
-            destination.name,
-            str(interaction.user.id),
-        )
+        record_id = _store_media_record(interaction, request, destination)
     except ValueError:
         if destination.exists():
             destination.unlink()
-        return [], [], "❌ Invalid reserved filename; upload was skipped."
-    return [song_id], [], None
+        return [], "❌ Invalid reserved filename; upload was skipped."
+    return [record_id], None
 
 
 def _upload_summary(
-    added_song_ids: list[int],
-    added_ad_files: list[str],
+    request: _UploadRequest,
+    inserted_ids: list[int],
     ignored_urls: list[str],
     failed_urls: list[str],
 ) -> str:
     """Build the final upload status message."""
     lines: list[str] = []
-    if added_song_ids:
+    media_name = request.kind
+    if inserted_ids:
         lines.append(
             "✅ Added "
-            f"{len(added_song_ids)} song(s). IDs: `{', '.join(map(str, added_song_ids))}`"
+            f"{len(inserted_ids)} {media_name}(s). IDs: `{', '.join(map(str, inserted_ids))}`"
         )
-    if added_ad_files:
-        lines.append(f"✅ Added {len(added_ad_files)} ad file(s).")
     if ignored_urls:
         lines.append(f"⚠️ Ignored {len(ignored_urls)} non-YouTube URL(s).")
     if failed_urls:
@@ -266,29 +303,20 @@ async def _handle_upload_song(
     request: _UploadRequest,
 ) -> str:
     """Process a validated upload request and return the status message."""
-    target_dir = SONGS_DIR if request.raw_target == "song" else ADS_DIR
-    added_song_ids, added_ad_files, ignored_urls, failed_urls = (
-        await _store_downloaded_media(
-            interaction,
-            request,
-            target_dir,
-        )
-    )
-    file_song_ids, file_ad_files, error_message = await _store_uploaded_attachment(
+    inserted_ids, ignored_urls, failed_urls = await _store_downloaded_media(
         interaction,
         request,
-        target_dir,
     )
+    file_ids, error_message = await _store_uploaded_attachment(interaction, request)
     if error_message is not None:
         return error_message
 
-    added_song_ids.extend(file_song_ids)
-    added_ad_files.extend(file_ad_files)
-    if request.raw_target == "ad" and (
-        added_ad_files or extract_urls(request.source or "")
-    ):
+    inserted_ids.extend(file_ids)
+    if request.kind == "ad" and inserted_ids:
         sync_ads_from_disk()
-    return _upload_summary(added_song_ids, added_ad_files, ignored_urls, failed_urls)
+    if request.kind == "broadcast" and inserted_ids:
+        sync_broadcasts_from_disk()
+    return _upload_summary(request, inserted_ids, ignored_urls, failed_urls)
 
 
 def _register_controller_commands(bot: MusicBot) -> None:
@@ -326,8 +354,10 @@ def _register_controller_commands(bot: MusicBot) -> None:
         description="DM user a quick tutorial and command list for manager commands.",
     )
     async def cmd_helpless_manager(interaction: discord.Interaction) -> None:
+        if not await require_music_manager(interaction, action="access manager help"):
+            return
         try:
-            await interaction.user.send(embed=_help_tutorial_embed())
+            await interaction.user.send(embed=_help_manager_tutorial_embed())
         except discord.Forbidden:
             # even more condescending since they are a manager but still "helpless" :P
             await interaction.response.send_message(
@@ -365,18 +395,48 @@ async def _send_toggle_song_result(
     )
 
 
-def _register_library_commands(bot: MusicBot) -> None:
-    """Register song library management and search commands."""
+async def _send_upload_followup(
+    interaction: discord.Interaction,
+    request: _UploadRequest,
+) -> None:
+    """Run upload processing and send the standard deferred follow-up."""
+    if not await _validate_upload_request(interaction, request):
+        return
+    await interaction.response.defer(ephemeral=True)
+    await interaction.followup.send(
+        await _handle_upload_song(interaction, request),
+        ephemeral=True,
+    )
+
+
+def _media_list_embed(
+    rows: list[str],
+    header: str,
+    title: str,
+    colour: discord.Colour,
+    suffix: str,
+) -> discord.Embed:
+    """Build a trimmed code-block embed for media list commands."""
+    divider = "─" * len(header)
+    shown_rows, hidden_count = _fit_rows_to_embed(header, divider, rows)
+    lines = [header, divider, *shown_rows]
+    if hidden_count:
+        lines.append(f"... ({hidden_count} more {suffix} not shown)")
+    embed = discord.Embed(title=title, colour=colour)
+    embed.description = "```\n" + "\n".join(lines) + "\n```"
+    embed.set_footer(text=f"{len(rows)} {suffix} total")
+    return embed
+
+
+def _register_upload_commands(bot: MusicBot) -> None:
+    """Register upload commands for songs, ads, and broadcasts."""
 
     @bot.tree.command(
         name="upload_song",
-        description="Add media from attachment, YouTube link(s), or both.",
+        description="Add song media from attachment, YouTube link(s), or both.",
     )
     @app_commands.describe(
-        source=(
-            "Optional text with YouTube link(s). You can also include kind:song or "
-            "kind:ad."
-        ),
+        source="Optional text with YouTube link(s)",
         file="Optional audio file attachment",
         name="Optional display name for attached file song",
         artist="Optional artist for attached file song",
@@ -388,14 +448,61 @@ def _register_library_commands(bot: MusicBot) -> None:
         name: str | None = None,
         artist: str | None = None,
     ) -> None:
-        request = _build_upload_request(source, file, name, artist)
-        if not await _validate_upload_request(interaction, request):
-            return
-        await interaction.response.defer(ephemeral=True)
-        await interaction.followup.send(
-            await _handle_upload_song(interaction, request),
-            ephemeral=True,
+        request = _UploadRequest(source, file, name, artist, "song")
+        await _send_upload_followup(interaction, request)
+
+    @bot.tree.command(
+        name="upload_ad",
+        description="Add ad media from attachment, YouTube link(s), or both.",
+    )
+    @app_commands.describe(
+        source="Optional text with YouTube link(s)",
+        file="Optional audio file attachment",
+        name="Optional ad name",
+        sponsor="Optional sponsor name",
+    )
+    async def cmd_upload_ad(
+        interaction: discord.Interaction,
+        source: str | None = None,
+        file: discord.Attachment | None = None,
+        name: str | None = None,
+        sponsor: str | None = None,
+    ) -> None:
+        request = _UploadRequest(source, file, name, sponsor, "ad")
+        await _send_upload_followup(interaction, request)
+
+    @bot.tree.command(
+        name="upload_broadcast",
+        description="Add DJ broadcasts from attachment or YouTube link(s).",
+    )
+    @app_commands.describe(
+        source="Optional text with YouTube link(s)",
+        file="Optional audio file attachment",
+        sponsor="Optional sponsor name",
+        placement="Optional `day` or `day:slot` (slot=intro|outro|event).",
+    )
+    async def cmd_upload_broadcast(
+        interaction: discord.Interaction,
+        source: str | None = None,
+        file: discord.Attachment | None = None,
+        sponsor: str | None = None,
+        placement: str | None = None,
+    ) -> None:
+        day, slot = _parse_broadcast_placement(placement)
+        request = _UploadRequest(
+            source,
+            file,
+            None,
+            sponsor,
+            "broadcast",
+            day=day,
+            slot=slot or "event",
         )
+        await _send_upload_followup(interaction, request)
+
+
+def _register_search_and_playlist_commands(bot: MusicBot) -> None:
+    """Register song search and playlist commands."""
 
     @bot.tree.command(
         name="search", description="Search songs by name, artist, uploader, or id."
@@ -421,24 +528,50 @@ def _register_library_commands(bot: MusicBot) -> None:
                 ephemeral=True,
             )
             return
+        result_view = SongListView(results)
+        result_view.update_buttons()
+        embed = result_view.build_embed()
+        embed.title = f'🔎 Results: {field.name} = "{query}"'
+        await interaction.response.send_message(
+            embed=embed,
+            view=result_view,
+            ephemeral=True,
+        )
+
+    @bot.tree.command(name="playlist", description="Show the playlist collection.")
+    async def cmd_playlist(interaction: discord.Interaction) -> None:
+        embed = await _song_table_embed(get_all_songs(), compact=True)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @bot.tree.command(
+        name="playlist_all",
+        description=(
+            "Show playlist including deactivated songs "
+            "(Music Manager only)."
+        ),
+    )
+    async def cmd_playlist_all(interaction: discord.Interaction) -> None:
+        if not await require_music_manager(interaction, action="view the full playlist"):
+            return
         embed = await _song_table_embed(
-            results,
-            title=f'🔎 Results: {field.name} = "{query}"',
+            get_all_songs_admin(),
+            title="🎵 Song Library (All)",
             client=interaction.client,
             guild=interaction.guild,
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
+def _register_song_management_commands(bot: MusicBot) -> None:
+    """Register manager song toggle/delete commands."""
+
     @bot.tree.command(
-        name="toggle_song", description="Activate/deactivate a song by name."
+        name="toggle_song",
+        description="Activate/deactivate a song by name.",
     )
     @app_commands.describe(name="Song name")
     async def cmd_toggle_song(interaction: discord.Interaction, name: str) -> None:
-        if not is_music_manager(interaction):
-            await interaction.response.send_message(
-                "❌ You need the **Music Manager** role to toggle songs.",
-                ephemeral=True,
-            )
+        if not await require_music_manager(interaction, action="toggle songs"):
             return
         matches = get_songs_by_name(name)
         if not matches:
@@ -462,21 +595,21 @@ def _register_library_commands(bot: MusicBot) -> None:
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         await _send_toggle_song_result(
-            interaction, matches[0], song_id=matches[0]["id"]
+            interaction,
+            matches[0],
+            song_id=matches[0]["id"],
         )
 
     @bot.tree.command(
-        name="toggle_song_id", description="Activate/deactivate by song id."
+        name="toggle_song_id",
+        description="Activate/deactivate by song id.",
     )
     @app_commands.describe(song_id="Song ID")
     async def cmd_toggle_song_id(
-        interaction: discord.Interaction, song_id: int
+        interaction: discord.Interaction,
+        song_id: int,
     ) -> None:
-        if not is_music_manager(interaction):
-            await interaction.response.send_message(
-                "❌ You need the **Music Manager** role to toggle songs.",
-                ephemeral=True,
-            )
+        if not await require_music_manager(interaction, action="toggle songs"):
             return
         if (song := await _get_song_or_respond_missing(interaction, song_id)) is None:
             return
@@ -488,7 +621,8 @@ def _register_library_commands(bot: MusicBot) -> None:
     )
     @app_commands.describe(song_id="Song ID")
     async def cmd_delete_song_id(
-        interaction: discord.Interaction, song_id: int
+        interaction: discord.Interaction,
+        song_id: int,
     ) -> None:
         if not await require_music_manager(interaction, action="delete songs"):
             return
@@ -506,29 +640,67 @@ def _register_library_commands(bot: MusicBot) -> None:
         await message.add_reaction(REACT_HARD_DELETE)
         bot.pending_deletes[message.id] = {"user_id": interaction.user.id, "song": song}
 
-    @bot.tree.command(name="playlist", description="Show the playlist collection.")
-    async def cmd_playlist(interaction: discord.Interaction) -> None:
-        embed = await _song_table_embed(get_all_songs(), compact=True)
+
+def _register_media_list_commands(bot: MusicBot) -> None:
+    """Register manager list commands for ads and broadcasts."""
+
+    @bot.tree.command(name="ad_list", description="Show all ads (Music Manager only).")
+    async def cmd_ad_list(interaction: discord.Interaction) -> None:
+        if not await require_music_manager(interaction, action="view ads"):
+            return
+        ads = get_all_ads_admin()
+        if not ads:
+            await interaction.response.send_message("*No ads in the library yet.*", ephemeral=True)
+            return
+        header = f"{'ID':<4} {'Name':<20} {'Sponsor':<20} {'Plays':<5} {'Avail':<5}"
+        rows = [
+            f"{ad['id']:<4} {ad['name'][:20]:<20} {ad['sponsor'][:20]:<20} "
+            f"{ad['times_played']:<5} {ad.get('available', 1)}"
+            for ad in ads
+        ]
+        embed = _media_list_embed(rows, header, "📢 Ad Library", discord.Colour.orange(), "ad(s)")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(
-        name="playlist_all",
-        description="Show the playlist collection including deactivated songs (Music Manager only).",
+        name="broadcast_list",
+        description="Show all broadcasts (Music Manager only).",
     )
-    async def cmd_playlist_all(interaction: discord.Interaction) -> None:
-        if not is_music_manager(interaction):
+    async def cmd_broadcast_list(interaction: discord.Interaction) -> None:
+        if not await require_music_manager(interaction, action="view broadcasts"):
+            return
+        broadcasts = get_all_broadcasts_admin()
+        if not broadcasts:
             await interaction.response.send_message(
-                "❌ You need the **Music Manager** role to view the full playlist.",
+                "*No broadcasts in the library yet.*",
                 ephemeral=True,
             )
             return
-        embed = await _song_table_embed(
-            get_all_songs_admin(),
-            title="🎵 Song Library (All)",
-            client=interaction.client,
-            guild=interaction.guild,
+        header = (
+            f"{'ID':<4} {'Day':<10} {'Slot':<7} "
+            f"{'Name':<18} {'Sponsor':<18} {'Plays':<5}"
+        )
+        rows = [
+            f"{clip['id']:<4} {clip['day'][:10]:<10} {clip['slot'][:7]:<7} "
+            f"{clip['name'][:18]:<18} {clip['sponsor'][:18]:<18} "
+            f"{clip['times_played']:<5}"
+            for clip in broadcasts
+        ]
+        embed = _media_list_embed(
+            rows,
+            header,
+            "🎙️ Broadcast Library",
+            discord.Colour.dark_teal(),
+            "broadcast(s)",
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+def _register_library_commands(bot: MusicBot) -> None:
+    """Register song, ad, and broadcast library commands."""
+    _register_upload_commands(bot)
+    _register_search_and_playlist_commands(bot)
+    _register_song_management_commands(bot)
+    _register_media_list_commands(bot)
 
 
 async def _send_dj_event_message(
@@ -585,23 +757,6 @@ def _register_playback_commands(bot: MusicBot) -> None:
             "are Hell's greatest hits now. :smiling_imp:",
             ephemeral=True,
         )
-
-    @bot.tree.command(name="now_playing", description="Show current song.")
-    async def cmd_now_playing(interaction: discord.Interaction) -> None:
-        song = bot.player.current_song
-        if not song:
-            await interaction.response.send_message(
-                "❌ Nothing is playing right now.",
-                ephemeral=True,
-            )
-            return
-        embed = discord.Embed(title="🎵 Now Playing", colour=discord.Colour.green())
-        embed.add_field(name="Song", value=song["name"], inline=True)
-        embed.add_field(name="Artist", value=song["artist"], inline=True)
-        embed.add_field(
-            name="Plays", value=str(song.get("times_played", 0)), inline=True
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(
         name="play_dj_event", description="Play a random DJ event clip now."
@@ -700,13 +855,11 @@ async def _start_purge_confirmation(
     alphabet = string.ascii_letters + string.digits
     confirmation_code = "".join(secrets.choice(alphabet) for _ in range(10))
     bot.purge_code = confirmation_code
-    bot.purge_code_expiry = time.time() + 300
 
     print("\n" + "=" * 60, flush=True)
     print(
         f"[PURGE CONFIRM] One-time password: {confirmation_code}", flush=True
     )  # noqa: S106
-    print("[PURGE CONFIRM] Password expires in 5 minutes.", flush=True)
     print("=" * 60 + "\n", flush=True)
 
     await interaction.response.send_modal(PurgeSongsConfirmModal())

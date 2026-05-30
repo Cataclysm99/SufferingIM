@@ -128,10 +128,10 @@ On every transition to next track:
 - Name/avatar/banner paths are optional config values
 
 ### Database model
-- Since deployment starts from fresh DB, migration logic was removed
 - `init_db()` now creates required tables directly:
   - `songs` (includes `vote_score` field)
-  - `ads`
+  - `ads` (name/sponsor/uploader/play counters)
+  - `broadcasts` (day/slot/name/sponsor/uploader/play counters)
   - `vote_cooldowns` (composite PK: user_id + song_id)
 
 ---
@@ -139,14 +139,17 @@ On every transition to next track:
 ## Commands (core)
 
 - `/controller` – post control panel
-- `/help` – DM a quick tutorial and command list
-- `/upload_song` – add media from attachment, YouTube link(s), or both; supports `target` Song/Ad (Music Manager)
-- `/songs`, `/songs_all`, `/search`
+- `/helpless` – DM a quick tutorial and command list
+- `/helpless_manager` – DM the extended manager tutorial (Music Manager)
+- `/upload_song` – add songs from attachment, YouTube link(s), or both (Music Manager)
+- `/upload_ad` – add ads from attachment, YouTube link(s), or both (Music Manager)
+- `/upload_broadcast` – add DJ broadcasts from attachment, YouTube link(s), or both (Music Manager)
+- `/playlist`, `/playlist_all`, `/search`
+- `/ad_list`, `/broadcast_list` (Music Manager)
 - `/toggle_song`, `/toggle_song_id` (Music Manager)
 - `/delete_song_id` (Music Manager, reaction-confirmed)
 - `/set_rigged_pool` (Music Manager, comma-separated IDs)
 - `/play_dj_event` (Music Manager)
-- `/now_playing`
 - `/like`, `/dislike`
 
 Buttons mirror the same core actions.

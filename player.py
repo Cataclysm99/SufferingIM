@@ -31,6 +31,7 @@ from config import (
 from database import (
     get_all_songs,
     get_random_ad,
+    increment_broadcast_play_count,
     get_song,
     get_songs_by_ids,
     increment_ad_play_count,
@@ -51,6 +52,7 @@ class _PlaybackCycleState:
     """Mutable state tracking ads, DJ events, and forced intermission clips."""
 
     forced_clip_path: Path | None = None
+    forced_clip_payload: dict | None = None
     forced_label: str = "intermission"
     cycle_started_at: float = field(default_factory=time.monotonic)
     last_ad_at: float = field(default_factory=time.monotonic)
@@ -262,13 +264,17 @@ class MusicPlayer:
             return False
         path = self._cycle.forced_clip_path
         label = self._cycle.forced_label
+        payload = self._cycle.forced_clip_payload
         self._cycle.forced_clip_path = None
+        self._cycle.forced_clip_payload = None
         if self._play_audio_file(path, label):
             if label == "ad":
                 self._cycle.last_ad_at = time.monotonic()
             elif label.startswith("dj"):
                 self._cycle.last_dj_event_at = time.monotonic()
-            await self._notify_track_start(None, label)
+            if payload and payload.get("id"):
+                increment_broadcast_play_count(payload["id"])
+            await self._notify_track_start(payload, label)
             return True
         return False
 
@@ -279,9 +285,10 @@ class MusicPlayer:
             return False
         clip = self.dj_events.intro_clip()
         self._cycle.intro_pending = False
-        if clip and self._play_audio_file(clip, "dj intro"):
+        if clip and self._play_audio_file(clip["path"], "dj intro"):
             self._cycle.last_dj_event_at = time.monotonic()
-            await self._notify_track_start(None, "dj intro")
+            increment_broadcast_play_count(clip["id"])
+            await self._notify_track_start(clip, "dj intro")
             return True
         return False
 
@@ -294,8 +301,9 @@ class MusicPlayer:
         clip = self.dj_events.outro_clip()
         self._reset_cycle()
         reset_negative_vote_scores()
-        if clip and self._play_audio_file(clip, "dj outro"):
-            await self._notify_track_start(None, "dj outro")
+        if clip and self._play_audio_file(clip["path"], "dj outro"):
+            increment_broadcast_play_count(clip["id"])
+            await self._notify_track_start(clip, "dj outro")
             return True
         return False
 
@@ -304,9 +312,10 @@ class MusicPlayer:
         if self.dj_events is None:
             return False
         clip = self.dj_events.random_hourly_clip(day)
-        if clip and self._play_audio_file(clip, "dj event"):
+        if clip and self._play_audio_file(clip["path"], "dj event"):
             self._cycle.last_dj_event_at = time.monotonic()
-            await self._notify_track_start(None, "dj event")
+            increment_broadcast_play_count(clip["id"])
+            await self._notify_track_start(clip, "dj event")
             return True
         return False
 
@@ -319,7 +328,7 @@ class MusicPlayer:
         if self._play_audio_file(path, "ad"):
             self._cycle.last_ad_at = time.monotonic()
             increment_ad_play_count(ad["id"])
-            await self._notify_track_start(None, "ad")
+            await self._notify_track_start(ad, "ad")
             return True
         return False
 
@@ -346,7 +355,8 @@ class MusicPlayer:
         clip = self.dj_events.random_hourly_clip(day)
         if clip is None:
             return False
-        self._cycle.forced_clip_path = clip
+        self._cycle.forced_clip_path = clip["path"]
+        self._cycle.forced_clip_payload = clip
         self._cycle.forced_label = "dj event"
         if self.voice_client.is_playing() or self.voice_client.is_paused():
             self.voice_client.stop()
