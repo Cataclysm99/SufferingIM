@@ -478,7 +478,8 @@ def _register_upload_commands(bot: MusicBot) -> None:
         source="Optional text with YouTube link(s)",
         file="Optional audio file attachment",
         sponsor="Optional sponsor name",
-        placement="Optional `day` or `day:slot` (slot=intro|outro|event).",
+        placement="Optional `day` or `day:slot` (day=Mon|Tue|Wed|Thu|Fri|Sat|Sun;"
+        "slot=intro|outro|event; default=today's day:event)",
     )
     async def cmd_upload_broadcast(
         interaction: discord.Interaction,

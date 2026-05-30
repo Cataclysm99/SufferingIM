@@ -211,7 +211,7 @@ def _help_tutorial_embed() -> discord.Embed:
         value="Managers can use **`/helpless_manager`** for advanced management docs.",
         inline=False,
     )
-    embed.set_footer(text="Some buttons require the Music Manager role.")
+    embed.set_footer(text="Some features require the Music Manager role.")
     return embed
 
 
@@ -242,11 +242,11 @@ def _help_manager_tutorial_embed() -> discord.Embed:
         inline=False,
     )
     embed.add_field(
-        name="Playback + persona controls",
+        name="Playback + state controls",
         value=(
             "**`/set_rigged_pool`** — set weighted rigged song IDs (`3,7,12` format).\n"
             "**`/play_dj_event`** — trigger a DJ clip now (optional day override).\n"
-            "**`/pardon`**, **`/damn`**, **`/save`** — switch controller/persona mode.\n"
+            "**`/pardon`**, **`/damn`**, **`/save`** — switch controller modes.\n"
             "**`/purge_songs`** — hard wipe songs via terminal one-time password."
         ),
         inline=False,
