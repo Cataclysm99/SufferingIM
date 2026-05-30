@@ -245,7 +245,7 @@ def _help_manager_tutorial_embed() -> discord.Embed:
         name="Playback + persona controls",
         value=(
             "**`/set_rigged_pool`** — set weighted rigged song IDs (`3,7,12` format).\n"
-            "**`/play_dj_event`** — trigger a DJ clip now (optional day override).\n"
+            "**`/play_dj_event`** — trigger a DJ clip now (optional day override or ID).\n"
             "**`/pardon`**, **`/damn`**, **`/save`** — switch controller/persona mode.\n"
             "**`/purge_songs`** — hard wipe songs via terminal one-time password."
         ),

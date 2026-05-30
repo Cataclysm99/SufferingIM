@@ -757,13 +757,15 @@ def _register_playback_commands(bot: MusicBot) -> None:
             ephemeral=True,
         )
 
-    @bot.tree.command(
-        name="play_dj_event", description="Play a random DJ event clip now."
+    @bot.tree.command(name="play_dj_event", description="Play a DJ event clip now.")
+    @app_commands.describe(
+        day="Optional day abbreviation: MON TUE WED THU FRI SAT SUN",
+        event_id="Optional broadcast ID from /broadcast_list to play directly",
     )
-    @app_commands.describe(day="Optional day abbreviation: MON TUE WED THU FRI SAT SUN")
     async def cmd_play_dj_event(
         interaction: discord.Interaction,
         day: str | None = None,
+        event_id: app_commands.Range[int, 1, 2147483647] | None = None,
     ) -> None:
         if not is_music_manager(interaction):
             await interaction.response.send_message(
@@ -798,7 +800,7 @@ def _register_playback_commands(bot: MusicBot) -> None:
                 return
         await _send_dj_event_message(
             interaction,
-            await bot.player.play_dj_event_now(day=target_day),
+            await bot.player.play_dj_event_now(day=target_day, event_id=event_id),
         )
 
     @bot.tree.command(name="like", description="Send a like for the current song.")
