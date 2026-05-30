@@ -1,4 +1,5 @@
 """database.py – SQLite helpers for songs, ads, and feedback."""
+
 from __future__ import annotations
 
 import sqlite3
@@ -29,8 +30,7 @@ def _is_reserved_media_filename(filename: str) -> bool:
 def init_db() -> None:
     """Create required tables."""
     with _get_conn() as conn:
-        conn.execute(
-            """
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS songs (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 name         TEXT    NOT NULL,
@@ -41,28 +41,23 @@ def init_db() -> None:
                 available    INTEGER NOT NULL DEFAULT 1,
                 vote_score   INTEGER NOT NULL DEFAULT 0
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS ads (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 filename     TEXT    NOT NULL UNIQUE,
                 times_played INTEGER NOT NULL DEFAULT 0,
                 available    INTEGER NOT NULL DEFAULT 1
             )
-            """
-        )
-        conn.execute(
-            """
+            """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS vote_cooldowns (
                 user_id  TEXT    NOT NULL,
                 song_id  INTEGER NOT NULL,
                 voted_at REAL    NOT NULL,
                 PRIMARY KEY (user_id, song_id)
             )
-            """
-        )
+            """)
         conn.commit()
 
 
@@ -70,10 +65,13 @@ def init_db() -> None:
 # Songs
 # ---------------------------------------------------------------------------
 
+
 def get_all_songs() -> list[dict]:
     """Return all active songs ordered by ID."""
     with _get_conn() as conn:
-        rows = conn.execute("SELECT * FROM songs WHERE available = 1 ORDER BY id").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM songs WHERE available = 1 ORDER BY id"
+        ).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -130,7 +128,9 @@ def search_songs(field: str, query: str) -> list[dict]:
                 (song_id,),
             ).fetchall()
         else:
-            rows = conn.execute(_FIELD_SEARCH_QUERIES[field], (f"%{query}%",)).fetchall()
+            rows = conn.execute(
+                _FIELD_SEARCH_QUERIES[field], (f"%{query}%",)
+            ).fetchall()
     return [dict(row) for row in rows]
 
 
@@ -244,7 +244,10 @@ def apply_song_feedback(song_id: int, user_id: int, is_like: bool) -> tuple[bool
             (delta, song_id),
         )
         conn.commit()
-    return True, "Feedback received."
+    return (
+        True,
+        "Thanks for your opinion. I've put it in a special place just for you. :wastebasket:",
+    )
 
 
 def reset_song_vote_score(song_id: int) -> None:
@@ -264,6 +267,7 @@ def reset_negative_vote_scores() -> None:
 # ---------------------------------------------------------------------------
 # Ads
 # ---------------------------------------------------------------------------
+
 
 def sync_ads_from_disk() -> None:
     """Ensure every file in ADS_DIR exists in the ads table."""
@@ -293,5 +297,7 @@ def get_random_ad() -> Optional[dict]:
 def increment_ad_play_count(ad_id: int) -> None:
     """Increment the play count for an ad."""
     with _get_conn() as conn:
-        conn.execute("UPDATE ads SET times_played = times_played + 1 WHERE id = ?", (ad_id,))
+        conn.execute(
+            "UPDATE ads SET times_played = times_played + 1 WHERE id = ?", (ad_id,)
+        )
         conn.commit()

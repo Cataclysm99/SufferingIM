@@ -322,7 +322,7 @@ class MusicBot(commands.Bot):
 
     def _branding_target(self) -> str:
         """Return the current branding target based on persona mode and weekday."""
-        if self.state.persona_mode == "forced_heaven":
+        if self.state.persona_mode == "heaven":
             return "heaven"
         if self.state.persona_mode == "collector":
             return "collector"
@@ -416,7 +416,7 @@ class MusicBot(commands.Bot):
         if not isinstance(raw, dict):
             return
         mode = raw.get("persona_mode")
-        if mode in {"collector", "day_cycle", "forced_heaven"}:
+        if mode in {"collector", "suffering", "heaven"}:
             self.state.persona_mode = mode
 
     def _save_controller_state(self) -> None:
@@ -456,7 +456,7 @@ class MusicBot(commands.Bot):
 
     def _state_key(self) -> str:
         """Return the current high-level persona key."""
-        if self.state.persona_mode == "forced_heaven":
+        if self.state.persona_mode == "heaven":
             return "heaven"
         if self.state.persona_mode == "collector":
             return "collector"

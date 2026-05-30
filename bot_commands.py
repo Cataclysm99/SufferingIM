@@ -1,4 +1,5 @@
 """Slash command registration for playback, library management, and persona controls."""
+
 from __future__ import annotations
 
 import asyncio
@@ -140,7 +141,9 @@ async def _validate_upload_request(
         )
         return False
 
-    youtube_urls = [url for url in extract_urls(request.source or "") if is_youtube_url(url)]
+    youtube_urls = [
+        url for url in extract_urls(request.source or "") if is_youtube_url(url)
+    ]
     if request.file is None and not youtube_urls:
         await interaction.response.send_message(
             "❌ Provide an attachment, a YouTube link, or both.",
@@ -264,10 +267,12 @@ async def _handle_upload_song(
 ) -> str:
     """Process a validated upload request and return the status message."""
     target_dir = SONGS_DIR if request.raw_target == "song" else ADS_DIR
-    added_song_ids, added_ad_files, ignored_urls, failed_urls = await _store_downloaded_media(
-        interaction,
-        request,
-        target_dir,
+    added_song_ids, added_ad_files, ignored_urls, failed_urls = (
+        await _store_downloaded_media(
+            interaction,
+            request,
+            target_dir,
+        )
     )
     file_song_ids, file_ad_files, error_message = await _store_uploaded_attachment(
         interaction,
@@ -279,7 +284,9 @@ async def _handle_upload_song(
 
     added_song_ids.extend(file_song_ids)
     added_ad_files.extend(file_ad_files)
-    if request.raw_target == "ad" and (added_ad_files or extract_urls(request.source or "")):
+    if request.raw_target == "ad" and (
+        added_ad_files or extract_urls(request.source or "")
+    ):
         sync_ads_from_disk()
     return _upload_summary(added_song_ids, added_ad_files, ignored_urls, failed_urls)
 
@@ -294,19 +301,45 @@ def _register_controller_commands(bot: MusicBot) -> None:
             view=bot.active_controller_view(),
         )
 
-    @bot.tree.command(name="help", description="DM a quick tutorial and command list.")
-    async def cmd_help(interaction: discord.Interaction) -> None:
+    @bot.tree.command(
+        name="helpless", description="DM user a quick tutorial and command list."
+    )
+    async def cmd_helpless(interaction: discord.Interaction) -> None:
         try:
             await interaction.user.send(embed=_help_tutorial_embed())
         except discord.Forbidden:
             await interaction.response.send_message(
-                "❌ I couldn't DM you. Please enable direct messages from server members "
-                "and try again.",
+                "❌ Asks for help but has DMs closed? How am I supposed to teach you anything? "
+                "Fix your settings and try again.",
                 ephemeral=True,
             )
             return
         await interaction.response.send_message(
-            "📬 I sent you a quick tutorial and command list in DMs.",
+            "Oh look, a helpless case, how surprising. :rolling_eyes: I've sent you the tutorial, "
+            "but don't expect me to spell everything out for you. "
+            "Explore the commands and figure it out yourself. 😒",
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="helpless_manager",
+        description="DM user a quick tutorial and command list for manager commands.",
+    )
+    async def cmd_helpless_manager(interaction: discord.Interaction) -> None:
+        try:
+            await interaction.user.send(embed=_help_tutorial_embed())
+        except discord.Forbidden:
+            # even more condescending since they are a manager but still "helpless" :P
+            await interaction.response.send_message(
+                "❌ How can someone trusted with managing the music library be so stupid "
+                "that they use a command that will DM them a tutorial, but keeps their DMs closed?"
+                " Don't you dare use this command again until you fix those settings!",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            "How did you even get a manager role if you are this helpless? "
+            "Look, I've sent you the tutorial, but that's all the help you're getting.",
             ephemeral=True,
         )
 
@@ -345,8 +378,8 @@ def _register_library_commands(bot: MusicBot) -> None:
             "kind:ad."
         ),
         file="Optional audio file attachment",
-        name="Optional display name override for attached file song",
-        artist="Optional artist override for attached file song",
+        name="Optional display name for attached file song",
+        artist="Optional artist for attached file song",
     )
     async def cmd_upload_song(
         interaction: discord.Interaction,
@@ -364,7 +397,9 @@ def _register_library_commands(bot: MusicBot) -> None:
             ephemeral=True,
         )
 
-    @bot.tree.command(name="search", description="Search songs by name, artist, uploader, or id.")
+    @bot.tree.command(
+        name="search", description="Search songs by name, artist, uploader, or id."
+    )
     @app_commands.describe(field="Field", query="Search term")
     @app_commands.choices(
         field=[
@@ -394,7 +429,9 @@ def _register_library_commands(bot: MusicBot) -> None:
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @bot.tree.command(name="toggle_song", description="Activate/deactivate a song by name.")
+    @bot.tree.command(
+        name="toggle_song", description="Activate/deactivate a song by name."
+    )
     @app_commands.describe(name="Song name")
     async def cmd_toggle_song(interaction: discord.Interaction, name: str) -> None:
         if not is_music_manager(interaction):
@@ -424,11 +461,17 @@ def _register_library_commands(bot: MusicBot) -> None:
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
-        await _send_toggle_song_result(interaction, matches[0], song_id=matches[0]["id"])
+        await _send_toggle_song_result(
+            interaction, matches[0], song_id=matches[0]["id"]
+        )
 
-    @bot.tree.command(name="toggle_song_id", description="Activate/deactivate by song id.")
+    @bot.tree.command(
+        name="toggle_song_id", description="Activate/deactivate by song id."
+    )
     @app_commands.describe(song_id="Song ID")
-    async def cmd_toggle_song_id(interaction: discord.Interaction, song_id: int) -> None:
+    async def cmd_toggle_song_id(
+        interaction: discord.Interaction, song_id: int
+    ) -> None:
         if not is_music_manager(interaction):
             await interaction.response.send_message(
                 "❌ You need the **Music Manager** role to toggle songs.",
@@ -439,9 +482,14 @@ def _register_library_commands(bot: MusicBot) -> None:
             return
         await _send_toggle_song_result(interaction, song, song_id=song_id)
 
-    @bot.tree.command(name="delete_song_id", description="Begin two-step delete by song id.")
+    @bot.tree.command(
+        name="delete_song_id",
+        description="Disable/delete a song by id with confirmation.",
+    )
     @app_commands.describe(song_id="Song ID")
-    async def cmd_delete_song_id(interaction: discord.Interaction, song_id: int) -> None:
+    async def cmd_delete_song_id(
+        interaction: discord.Interaction, song_id: int
+    ) -> None:
         if not await require_music_manager(interaction, action="delete songs"):
             return
         if (song := await _get_song_or_respond_missing(interaction, song_id)) is None:
@@ -458,19 +506,19 @@ def _register_library_commands(bot: MusicBot) -> None:
         await message.add_reaction(REACT_HARD_DELETE)
         bot.pending_deletes[message.id] = {"user_id": interaction.user.id, "song": song}
 
-    @bot.tree.command(name="songs", description="Show active songs.")
-    async def cmd_songs(interaction: discord.Interaction) -> None:
+    @bot.tree.command(name="playlist", description="Show the playlist collection.")
+    async def cmd_playlist(interaction: discord.Interaction) -> None:
         embed = await _song_table_embed(get_all_songs(), compact=True)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @bot.tree.command(
-        name="songs_all",
-        description="Show all songs including deactivated (Music Manager only).",
+        name="playlist_all",
+        description="Show the playlist collection including deactivated songs (Music Manager only).",
     )
-    async def cmd_songs_all(interaction: discord.Interaction) -> None:
+    async def cmd_playlist_all(interaction: discord.Interaction) -> None:
         if not is_music_manager(interaction):
             await interaction.response.send_message(
-                "❌ You need the **Music Manager** role to view the full library.",
+                "❌ You need the **Music Manager** role to view the full playlist.",
                 ephemeral=True,
             )
             return
@@ -508,7 +556,9 @@ def _register_playback_commands(bot: MusicBot) -> None:
         description="Set rigged song IDs as comma-separated list (empty/0 to clear).",
     )
     @app_commands.describe(song_ids="Example: 3,7,12")
-    async def cmd_set_rigged_pool(interaction: discord.Interaction, song_ids: str) -> None:
+    async def cmd_set_rigged_pool(
+        interaction: discord.Interaction, song_ids: str
+    ) -> None:
         if not is_music_manager(interaction):
             await interaction.response.send_message(
                 "❌ You need the **Music Manager** role.",
@@ -526,12 +576,13 @@ def _register_playback_commands(bot: MusicBot) -> None:
         bot.player.set_rigged_songs(ids)
         if not ids:
             await interaction.response.send_message(
-                "🎭 Rigged song pool cleared.",
+                "Looks like the devil misplaced his playlist, it won't be lost forever though.",
                 ephemeral=True,
             )
             return
         await interaction.response.send_message(
-            f"🎭 Rigged song pool set to IDs: {', '.join(str(song_id) for song_id in ids)}",
+            f"{', '.join(str(song_id) for song_id in ids)} "
+            "are Hell's greatest hits now. :smiling_imp:",
             ephemeral=True,
         )
 
@@ -547,10 +598,14 @@ def _register_playback_commands(bot: MusicBot) -> None:
         embed = discord.Embed(title="🎵 Now Playing", colour=discord.Colour.green())
         embed.add_field(name="Song", value=song["name"], inline=True)
         embed.add_field(name="Artist", value=song["artist"], inline=True)
-        embed.add_field(name="Plays", value=str(song.get("times_played", 0)), inline=True)
+        embed.add_field(
+            name="Plays", value=str(song.get("times_played", 0)), inline=True
+        )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @bot.tree.command(name="play_dj_event", description="Play a random DJ event clip now.")
+    @bot.tree.command(
+        name="play_dj_event", description="Play a random DJ event clip now."
+    )
     @app_commands.describe(day="Optional day abbreviation: MON TUE WED THU FRI SAT SUN")
     async def cmd_play_dj_event(
         interaction: discord.Interaction,
@@ -598,7 +653,9 @@ def _register_playback_commands(bot: MusicBot) -> None:
         prefix = "👍" if ok else "❌"
         await interaction.response.send_message(f"{prefix} {message}", ephemeral=True)
 
-    @bot.tree.command(name="dislike", description="Send a dislike for the current song.")
+    @bot.tree.command(
+        name="dislike", description="Send a dislike for the current song."
+    )
     async def cmd_dislike(interaction: discord.Interaction) -> None:
         ok, message = await bot.submit_current_song_feedback(interaction, is_like=False)
         prefix = "👎" if ok else "❌"
@@ -646,7 +703,9 @@ async def _start_purge_confirmation(
     bot.purge_code_expiry = time.time() + 300
 
     print("\n" + "=" * 60, flush=True)
-    print(f"[PURGE CONFIRM] One-time password: {confirmation_code}", flush=True)  # noqa: S106
+    print(
+        f"[PURGE CONFIRM] One-time password: {confirmation_code}", flush=True
+    )  # noqa: S106
     print("[PURGE CONFIRM] Password expires in 5 minutes.", flush=True)
     print("=" * 60 + "\n", flush=True)
 
@@ -656,23 +715,26 @@ async def _start_purge_confirmation(
 def _register_persona_commands(bot: MusicBot) -> None:
     """Register persona switching and purge commands."""
 
-    @bot.tree.command(name="pardon", description="Switch to the limited shady controller mode.")
+    @bot.tree.command(
+        name="pardon",
+        description="Collector is returned to the land of the living, for now.",
+    )
     async def cmd_pardon(interaction: discord.Interaction) -> None:
         await _handle_persona_switch(interaction, bot, "collector")
 
     @bot.tree.command(
         name="damn",
-        description="Switch to full mode with default day-based persona.",
+        description="Get access to SufferingFML at the low cost of damning the Collector to hell.",
     )
     async def cmd_damn(interaction: discord.Interaction) -> None:
-        await _handle_persona_switch(interaction, bot, "day_cycle")
+        await _handle_persona_switch(interaction, bot, "suffering")
 
     @bot.tree.command(
         name="save",
-        description="Switch to full mode and force Heaven persona.",
+        description="Get access to HeavenIN by saving the Collector from eternal suffering.",
     )
     async def cmd_save(interaction: discord.Interaction) -> None:
-        await _handle_persona_switch(interaction, bot, "forced_heaven")
+        await _handle_persona_switch(interaction, bot, "heaven")
 
     @bot.tree.command(
         name="purge_songs",
