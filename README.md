@@ -151,6 +151,7 @@ On every transition to next track:
 - `/set_rigged_pool` (Music Manager, comma-separated IDs)
 - `/play_dj_event` (Music Manager)
 - `/like`, `/dislike`
+- `!sync` – copy the current slash commands into this server immediately (Manage Server)
 
 Buttons mirror the same core actions.
 

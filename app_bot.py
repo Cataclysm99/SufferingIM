@@ -257,6 +257,48 @@ def _unique_path(directory: Path, filename: str) -> Path:
     return candidate
 
 
+@commands.command(name="sync")
+@commands.guild_only()
+async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
+    """Copy global slash commands into the current guild and sync them immediately."""
+    author = ctx.author
+    if not isinstance(author, discord.Member) or not author.guild_permissions.manage_guild:
+        await ctx.reply(
+            "❌ You need the **Manage Server** permission to sync slash commands here.",
+            mention_author=False,
+        )
+        return
+
+    try:
+        ctx.bot.tree.clear_commands(guild=ctx.guild)
+        ctx.bot.tree.copy_global_to(guild=ctx.guild)
+        synced = await ctx.bot.tree.sync(guild=ctx.guild)
+    except discord.DiscordException as exc:
+        log.warning(
+            "Guild slash-command sync failed for %s (%s): %s",
+            ctx.guild,
+            getattr(ctx.guild, "id", "unknown"),
+            exc,
+        )
+        await ctx.reply(
+            "❌ Couldn't sync slash commands for this server right now.",
+            mention_author=False,
+        )
+        return
+
+    log.info(
+        "Synced %d app command(s) to guild %s (%s) at request of %s",
+        len(synced),
+        ctx.guild,
+        getattr(ctx.guild, "id", "unknown"),
+        author.id,
+    )
+    await ctx.reply(
+        f"✅ Synced **{len(synced)}** slash command(s) to **{ctx.guild}**.",
+        mention_author=False,
+    )
+
+
 class MusicBot(commands.Bot):
     """Discord bot coordinating playback, controller views, and persona branding."""
 
@@ -267,6 +309,7 @@ class MusicBot(commands.Bot):
         self.state = _BotVisualState()
         self.controller_message: discord.Message | None = None
         self.purge_code: str | None = None
+        self.add_command(_sync_tree_command)
 
     async def setup_hook(self) -> None:
         """Register persistent views and sync the application command tree."""
