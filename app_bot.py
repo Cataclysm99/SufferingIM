@@ -201,8 +201,8 @@ def _help_tutorial_embed() -> discord.Embed:
     embed.add_field(
         name="4) Add music",
         value=(
-            "Music Managers can use **`/upload_song`** for attachments or YouTube links.\n"
-            "The **➕ Add Song** button can add a song directly from a YouTube link."
+            "Use the **➕ Add Song** button to submit a YouTube link directly from "
+            "the controller."
         ),
         inline=False,
     )
@@ -217,20 +217,50 @@ def _help_tutorial_embed() -> discord.Embed:
 
 def _help_manager_tutorial_embed() -> discord.Embed:
     """Build the manager-focused help/tutorial embed sent through DMs."""
-    embed = _help_tutorial_embed()
-    embed.title = "🎛️ SufferingFM Manager Guide"
-    embed.description = "Extended command guide for Music Managers."
+    embed = discord.Embed(
+        title="🎛️ SufferingFM Manager Guide",
+        description="Manager-only command reference with usage hints.",
+        colour=discord.Colour.dark_teal(),
+    )
     embed.add_field(
-        name="Manager command set",
+        name="Upload commands",
         value=(
-            "**`/upload_song`**, **`/upload_ad`**, **`/upload_broadcast`**,\n"
-            "**`/playlist_all`**, **`/ad_list`**, **`/broadcast_list`**,\n"
-            "**`/toggle_song`**, **`/toggle_song_id`**, **`/delete_song_id`**,\n"
-            "**`/set_rigged_pool`**, **`/play_dj_event`**, **`/pardon`**, "
-            "**`/damn`**, **`/save`**, **`/purge_songs`**."
+            "**`/upload_song`** — add songs from attachment, YouTube links, or both.\n"
+            "**`/upload_ad`** — add ad clips from attachment, YouTube links, or both.\n"
+            "**`/upload_broadcast`** — add DJ clips; use `placement` as `day` or `day:slot`."
         ),
         inline=False,
     )
+    embed.add_field(
+        name="Library management",
+        value=(
+            "**`/playlist_all`** — full song list including disabled entries.\n"
+            "**`/ad_list`** / **`/broadcast_list`** — view ad and DJ libraries.\n"
+            "**`/toggle_song`** / **`/toggle_song_id`** — enable or disable songs.\n"
+            "**`/delete_song_id`** — react-confirmed delete flow for a song by ID."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Playback + persona controls",
+        value=(
+            "**`/set_rigged_pool`** — set weighted rigged song IDs (`3,7,12` format).\n"
+            "**`/play_dj_event`** — trigger a DJ clip now (optional day override).\n"
+            "**`/pardon`**, **`/damn`**, **`/save`** — switch controller/persona mode.\n"
+            "**`/purge_songs`** — hard wipe songs via terminal one-time password."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Command rollout + troubleshooting",
+        value=(
+            "**`!sync`** — clear this server's temporary slash overrides and re-sync "
+            "global commands.\n"
+            "If a command asks for IDs, run **`/playlist_all`** first and copy the ID column."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text="Manager commands require the Music Manager role.")
     return embed
 
 
@@ -260,7 +290,7 @@ def _unique_path(directory: Path, filename: str) -> Path:
 @commands.command(name="sync")
 @commands.guild_only()
 async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
-    """Copy global slash commands into the current guild and sync them immediately."""
+    """Clear guild overrides and sync global slash commands to avoid duplicate entries."""
     author = ctx.author
     if not isinstance(author, discord.Member) or not author.guild_permissions.manage_guild:
         await ctx.reply(
@@ -271,11 +301,11 @@ async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
 
     try:
         ctx.bot.tree.clear_commands(guild=ctx.guild)
-        ctx.bot.tree.copy_global_to(guild=ctx.guild)
-        synced = await ctx.bot.tree.sync(guild=ctx.guild)
+        cleared = await ctx.bot.tree.sync(guild=ctx.guild)
+        synced = await ctx.bot.tree.sync()
     except discord.DiscordException as exc:
         log.warning(
-            "Guild slash-command sync failed for %s (%s): %s",
+            "Slash-command sync failed for %s (%s): %s",
             ctx.guild,
             getattr(ctx.guild, "id", "unknown"),
             exc,
@@ -287,14 +317,15 @@ async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
         return
 
     log.info(
-        "Synced %d app command(s) to guild %s (%s) at request of %s",
+        "Cleared %d guild app command(s) and synced %d global commands (requester=%s, guild=%s)",
+        len(cleared),
         len(synced),
-        ctx.guild,
-        getattr(ctx.guild, "id", "unknown"),
         author.id,
+        getattr(ctx.guild, "id", "unknown"),
     )
     await ctx.reply(
-        f"✅ Synced **{len(synced)}** slash command(s) to **{ctx.guild}**.",
+        "✅ Cleared temporary server command overrides "
+        f"(**{len(cleared)}** removed) and synced **{len(synced)}** global slash command(s).",
         mention_author=False,
     )
 
