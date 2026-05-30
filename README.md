@@ -149,7 +149,7 @@ On every transition to next track:
 - `/toggle_song`, `/toggle_song_id` (Music Manager)
 - `/delete_song_id` (Music Manager, reaction-confirmed)
 - `/set_rigged_pool` (Music Manager, comma-separated IDs)
-- `/play_dj_event` (Music Manager)
+- `/play_dj_event` (Music Manager, optional day or broadcast ID)
 - `/like`, `/dislike`
 - `!sync` – clear server-specific slash overrides and re-sync global slash commands
   (Manage Server)

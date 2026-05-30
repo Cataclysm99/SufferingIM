@@ -348,11 +348,19 @@ class MusicPlayer:
     # Public manual trigger APIs
     # ------------------------------------------------------------------
 
-    async def play_dj_event_now(self, day: str | None = None) -> bool:
+    async def play_dj_event_now(
+        self,
+        day: str | None = None,
+        event_id: int | None = None,
+    ) -> bool:
         """Queue a DJ event immediately, interrupting the current playback if needed."""
         if not (self.voice_client and self.voice_client.is_connected() and self.dj_events):
             return False
-        clip = self.dj_events.random_hourly_clip(day)
+        clip = (
+            self.dj_events.event_clip_by_id(event_id)
+            if event_id is not None
+            else self.dj_events.random_hourly_clip(day)
+        )
         if clip is None:
             return False
         self._cycle.forced_clip_path = clip["path"]

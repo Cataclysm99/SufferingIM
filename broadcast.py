@@ -5,7 +5,7 @@ import datetime
 from pathlib import Path
 from typing import Optional
 
-from database import get_broadcast_clip
+from database import get_broadcast_by_id, get_broadcast_clip
 
 DAYS: tuple[str, ...] = (
     "monday",
@@ -54,5 +54,15 @@ class DJEventScheduler:
         selected_day = day or self.today_name()
         clip = self._clip(selected_day, "event")
         if clip is None:
+            return None
+        return clip
+
+    def event_clip_by_id(self, broadcast_id: int) -> Optional[dict]:
+        """Return event broadcast metadata for an explicit broadcast ID."""
+        clip = get_broadcast_by_id(broadcast_id)
+        if clip is None or clip.get("slot") != "event":
+            return None
+        clip["path"] = self.dj_dir / clip["day"] / clip["filename"]
+        if not clip["path"].exists():
             return None
         return clip

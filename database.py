@@ -476,6 +476,16 @@ def get_broadcast_clip(day: str, slot: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def get_broadcast_by_id(broadcast_id: int) -> Optional[dict]:
+    """Return one broadcast clip by ID when it is available."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM broadcasts WHERE id = ? AND available = 1",
+            (broadcast_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def increment_broadcast_play_count(broadcast_id: int) -> None:
     """Increment the play count for a broadcast clip."""
     with _get_conn() as conn:
