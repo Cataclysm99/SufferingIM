@@ -216,7 +216,7 @@ def _help_tutorial_embed() -> discord.Embed:
 
 
 def _help_manager_tutorial_embed() -> discord.Embed:
-    """Build the manager-focused help/tutorial embed sent through DMs."""
+    """Build the manager-focused help/tutorial embed for DM delivery."""
     embed = discord.Embed(
         title="🎛️ SufferingFM Manager Guide",
         description="Manager-only command reference with usage hints.",
@@ -290,7 +290,7 @@ def _unique_path(directory: Path, filename: str) -> Path:
 @commands.command(name="sync")
 @commands.guild_only()
 async def _sync_tree_command(ctx: commands.Context[MusicBot]) -> None:
-    """Clear guild overrides and sync global slash commands to avoid duplicate entries."""
+    """Clear guild overrides so this guild falls back to one global slash-command set."""
     author = ctx.author
     if not isinstance(author, discord.Member) or not author.guild_permissions.manage_guild:
         await ctx.reply(
