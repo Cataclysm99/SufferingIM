@@ -87,7 +87,6 @@ class PurgeSongsConfirmModal(discord.ui.Modal, title="Confirm Full Song Purge"):
             )
             return
         client.purge_code = None
-        client.purge_code = None
         await interaction.response.defer(ephemeral=True)
 
         deleted = purge_all_songs()
