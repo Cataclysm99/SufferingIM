@@ -109,7 +109,6 @@ class ManageSongsView(discord.ui.View):
         self.requester_id = requester_id
         self.message: discord.Message | None = None
         self._songs = songs
-        self._songs_by_id = {int(song["id"]): song for song in songs}
         self._pending_updates: dict[int, _PendingSongUpdate] = {}
         self._page = 0
         self.selected_song_id = int(songs[0]["id"])
@@ -125,7 +124,10 @@ class ManageSongsView(discord.ui.View):
     @property
     def selected_song(self) -> dict:
         """Return the currently selected persisted song record."""
-        return self._songs_by_id[self.selected_song_id]
+        for song in self._songs:
+            if int(song["id"]) == self.selected_song_id:
+                return song
+        return self._songs[0]
 
     @property
     def selected_song_snapshot(self) -> dict:
@@ -231,7 +233,11 @@ class ManageSongsView(discord.ui.View):
             value=str(song.get("description", "")).strip() or "None",
             inline=False,
         )
-        embed.add_field(name="Filename", value=str(song.get("filename", "")) or "Unknown", inline=False)
+        embed.add_field(
+            name="Filename",
+            value=str(song.get("filename", "")) or "Unknown",
+            inline=False,
+        )
         embed.add_field(name="Last Added/Edited By", value=added_by_display, inline=False)
         footer = f"Page {self._page + 1}/{self.total_pages}"
         if pending is not None:
@@ -318,10 +324,12 @@ class ManageSongsView(discord.ui.View):
             return
         updated = update_song_metadata(
             self.selected_song_id,
-            name=pending.name,
-            description=pending.description,
-            genres=pending.genres,
-            available=pending.available,
+            {
+                "name": pending.name,
+                "description": pending.description,
+                "genres": pending.genres,
+                "available": pending.available,
+            },
             added_by=str(interaction.user.id),
         )
         if updated is None:
@@ -335,7 +343,6 @@ class ManageSongsView(discord.ui.View):
                 continue
             self._songs[index] = updated
             break
-        self._songs_by_id[self.selected_song_id] = updated
         self._pending_updates.pop(self.selected_song_id, None)
         self.refresh_controls()
         await interaction.response.edit_message(

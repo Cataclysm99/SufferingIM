@@ -239,7 +239,8 @@ def _help_manager_tutorial_embed() -> discord.Embed:
             "**`/ad_list`** / **`/broadcast_list`** — view ad and DJ libraries.\n"
             "**`/toggle_song`** / **`/toggle_song_id`** — enable or disable songs.\n"
             "**`/delete_song_id`** — react-confirmed flow (✅ disable / 🗑️ delete / 🚫 cancel).\n"
-            "**`/manage_songs`** — dropdown editor for song name, description, genres, and availability."
+            "**`/manage_songs`** — dropdown editor for song name, description, "
+            "genres, and availability."
         ),
         inline=False,
     )

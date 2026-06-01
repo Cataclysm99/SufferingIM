@@ -346,13 +346,12 @@ def add_song(
     artist: str,
     filename: str,
     added_by: str = "",
-    *,
-    description: str = "",
-    genres: str = "",
+    metadata: dict | None = None,
 ) -> int:
     """Insert a new song and return its generated database ID."""
     if _is_reserved_media_filename(filename):
         raise ValueError(f"Reserved media filename is not allowed: {filename}")
+    metadata = metadata or {}
     with _get_conn() as conn:
         cursor = conn.execute(
             (
@@ -362,8 +361,8 @@ def add_song(
             (
                 name,
                 artist,
-                description.strip(),
-                serialize_genre_names(genres),
+                str(metadata.get("description", "")).strip(),
+                serialize_genre_names(str(metadata.get("genres", ""))),
                 filename,
                 added_by,
             ),
@@ -374,14 +373,14 @@ def add_song(
 
 def update_song_metadata(
     song_id: int,
-    *,
-    name: str,
-    description: str,
-    genres: str,
-    available: bool,
+    updates: dict,
     added_by: str,
 ) -> Optional[dict]:
     """Update editable song metadata and return the refreshed row."""
+    name = str(updates.get("name", "")).strip()
+    description = str(updates.get("description", "")).strip()
+    genres = serialize_genre_names(str(updates.get("genres", "")))
+    available = bool(updates.get("available", True))
     with _get_conn() as conn:
         row = conn.execute("SELECT * FROM songs WHERE id = ?", (song_id,)).fetchone()
         if row is None:
