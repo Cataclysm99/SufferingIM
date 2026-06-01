@@ -14,6 +14,7 @@ from .helpers import (
     _send_missing_song_id,
     _song_table_embed,
 )
+from .manage_songs import ManageSongsView
 from .modals import AddSongModal, DeleteSongByIdModal, DeleteSongModal
 from .permissions import is_music_manager, require_music_manager
 from .song_list import SongListView
@@ -23,6 +24,7 @@ __all__ = [
     "CONTROLLER_SEARCH_LIMIT",
     "DeleteSongByIdModal",
     "DeleteSongModal",
+    "ManageSongsView",
     "MusicControlView",
     "REACT_CANCEL",
     "REACT_DEACTIVATE",

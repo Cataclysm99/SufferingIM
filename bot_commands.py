@@ -22,6 +22,9 @@ from database import (
     add_ad,
     add_broadcast,
     add_song,
+    disable_daily_genres,
+    enable_daily_genres,
+    get_daily_genre_filter,
     get_all_ads_admin,
     get_all_broadcasts_admin,
     deactivate_song,
@@ -29,6 +32,7 @@ from database import (
     get_all_songs_admin,
     get_songs_by_name,
     purge_all_songs,
+    serialize_genre_names,
     search_songs,
     sync_ads_from_disk,
     sync_broadcasts_from_disk,
@@ -42,6 +46,7 @@ from views import (
     _get_song_or_respond_missing,
     _resolve_username,
     _song_table_embed,
+    ManageSongsView,
     is_music_manager,
     require_music_manager,
 )
@@ -172,6 +177,30 @@ def _parse_broadcast_placement(placement: str | None) -> tuple[str | None, str |
     if len(chunks) == 2 and chunks[1] in {"intro", "outro", "event"}:
         slot = chunks[1]
     return day, slot
+
+
+def _normalized_genre_input(genres: str) -> str:
+    """Return canonical comma-separated genres from raw user input."""
+    return serialize_genre_names(genres)
+
+
+def _daily_genre_status_text(state: dict) -> str:
+    """Describe the current daily genre filter state for command replies."""
+    genres = state.get("genres", [])
+    mode = state.get("mode", "all")
+    if mode == "include" and genres:
+        return (
+            "Enabled today: "
+            f"**{', '.join(genres)}**.\n"
+            "All other tagged genres are excluded for today."
+        )
+    if mode == "exclude" and genres:
+        return (
+            "Disabled today: "
+            f"**{', '.join(genres)}**.\n"
+            "Songs stay playable unless all of their tagged genres are disabled."
+        )
+    return "All tagged genres are currently enabled for today."
 
 
 def _target_dir(request: _UploadRequest) -> Path:
@@ -517,6 +546,7 @@ def _register_search_and_playlist_commands(bot: MusicBot) -> None:
             app_commands.Choice(name="Name", value="name"),
             app_commands.Choice(name="Artist", value="artist"),
             app_commands.Choice(name="Added By", value="added_by"),
+            app_commands.Choice(name="Genre", value="genre"),
             app_commands.Choice(name="ID", value="id"),
         ]
     )
@@ -652,6 +682,80 @@ def _register_song_management_commands(bot: MusicBot) -> None:
         await message.add_reaction(REACT_CANCEL)
         bot.pending_deletes[message.id] = {"user_id": interaction.user.id, "song": song}
 
+    @bot.tree.command(
+        name="manage_songs",
+        description="Open the interactive song manager (Music Manager only).",
+    )
+    async def cmd_manage_songs(interaction: discord.Interaction) -> None:
+        if not await require_music_manager(interaction, action="manage songs"):
+            return
+        songs = get_all_songs_admin()
+        if not songs:
+            await interaction.response.send_message(
+                "*No songs in the library yet.*",
+                ephemeral=True,
+            )
+            return
+        view = ManageSongsView(songs, interaction.user.id)
+        await interaction.response.send_message(
+            embed=await view.build_embed(interaction.client, interaction.guild),
+            view=view,
+            ephemeral=True,
+        )
+        view.message = await interaction.original_response()
+
+
+def _register_genre_commands(bot: MusicBot) -> None:
+    """Register public commands for today's genre filter state."""
+
+    @bot.tree.command(
+        name="enable_genres",
+        description="Enable only these genres, or re-enable ones you disabled earlier.",
+    )
+    @app_commands.describe(genres="Comma-separated genres, for example: rock, synthwave")
+    async def cmd_enable_genres(interaction: discord.Interaction, genres: str) -> None:
+        normalized = _normalized_genre_input(genres)
+        if not normalized:
+            await interaction.response.send_message(
+                "❌ Provide at least one genre.",
+                ephemeral=True,
+            )
+            return
+        state = enable_daily_genres(normalized)
+        await interaction.response.send_message(
+            "✅ Updated today's enabled genres.\n" + _daily_genre_status_text(state),
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="disable_genres",
+        description="Disable these genres for today while keeping all other genres active.",
+    )
+    @app_commands.describe(genres="Comma-separated genres, for example: rock, synthwave")
+    async def cmd_disable_genres(interaction: discord.Interaction, genres: str) -> None:
+        normalized = _normalized_genre_input(genres)
+        if not normalized:
+            await interaction.response.send_message(
+                "❌ Provide at least one genre.",
+                ephemeral=True,
+            )
+            return
+        state = disable_daily_genres(normalized)
+        await interaction.response.send_message(
+            "✅ Updated today's disabled genres.\n" + _daily_genre_status_text(state),
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="genres_today",
+        description="Show the current daily genre filter state.",
+    )
+    async def cmd_genres_today(interaction: discord.Interaction) -> None:
+        await interaction.response.send_message(
+            _daily_genre_status_text(get_daily_genre_filter()),
+            ephemeral=True,
+        )
+
 
 def _register_media_list_commands(bot: MusicBot) -> None:
     """Register manager list commands for ads and broadcasts."""
@@ -712,6 +816,7 @@ def _register_library_commands(bot: MusicBot) -> None:
     _register_upload_commands(bot)
     _register_search_and_playlist_commands(bot)
     _register_song_management_commands(bot)
+    _register_genre_commands(bot)
     _register_media_list_commands(bot)
 
 

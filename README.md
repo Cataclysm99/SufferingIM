@@ -129,10 +129,11 @@ On every transition to next track:
 
 ### Database model
 - `init_db()` now creates required tables directly:
-  - `songs` (includes `vote_score` field)
+  - `songs` (includes `description`, comma-separated `genres`, and `vote_score` fields)
   - `ads` (name/sponsor/uploader/play counters)
   - `broadcasts` (day/slot/name/sponsor/uploader/play counters)
   - `vote_cooldowns` (unique user_id cooldown tracking)
+  - `genre_filter_state` / `genre_filter_entries` (daily genre include/exclude controls)
 
 ---
 
@@ -144,10 +145,12 @@ On every transition to next track:
 - `/upload_song` – add songs from attachment, YouTube link(s), or both (Music Manager)
 - `/upload_ad` – add ads from attachment, YouTube link(s), or both (Music Manager)
 - `/upload_broadcast` – add DJ broadcasts from attachment, YouTube link(s), or both (Music Manager)
-- `/playlist`, `/playlist_all`, `/search`
+- `/playlist`, `/playlist_all`, `/search`, `/genres_today`
 - `/ad_list`, `/broadcast_list` (Music Manager)
 - `/toggle_song`, `/toggle_song_id` (Music Manager)
 - `/delete_song_id` (Music Manager, reaction-confirmed: ✅ deactivate / 🗑️ delete / 🚫 cancel)
+- `/manage_songs` (Music Manager dropdown editor for song metadata)
+- `/enable_genres`, `/disable_genres` (daily genre controls)
 - `/set_rigged_pool` (Music Manager, comma-separated IDs)
 - `/play_dj_event` (Music Manager, optional day or broadcast ID)
 - `/like`, `/dislike`

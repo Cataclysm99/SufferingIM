@@ -5,11 +5,15 @@ from __future__ import annotations
 import sqlite3
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from config import ADS_DIR, ALLOWED_EXTENSIONS, DB_PATH, DJ_EVENTS_DIR
 
-SEARCHABLE_FIELDS = frozenset({"name", "artist", "added_by", "id"})
+SEARCHABLE_FIELDS = frozenset({"name", "artist", "added_by", "genre", "id"})
+
+GENRE_FILTER_MODE_ALL = "all"
+GENRE_FILTER_MODE_INCLUDE = "include"
+GENRE_FILTER_MODE_EXCLUDE = "exclude"
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -27,6 +31,34 @@ def _is_reserved_media_filename(filename: str) -> bool:
     return name.startswith(".")
 
 
+def normalize_genre_name(raw_genre: str) -> str:
+    """Normalize one genre label for storage and comparisons."""
+    return " ".join(raw_genre.strip().lower().split())
+
+
+def parse_genre_names(raw_genres: str | None) -> list[str]:
+    """Parse a comma-separated genre string into a unique normalized list."""
+    if not raw_genres:
+        return []
+    seen: set[str] = set()
+    parsed: list[str] = []
+    for chunk in str(raw_genres).split(","):
+        genre = normalize_genre_name(chunk)
+        if genre and genre not in seen:
+            seen.add(genre)
+            parsed.append(genre)
+    return parsed
+
+
+def serialize_genre_names(genres: Iterable[str] | str | None) -> str:
+    """Serialize genres into the canonical comma-separated storage format."""
+    if isinstance(genres, str) or genres is None:
+        parsed = parse_genre_names(genres)
+    else:
+        parsed = parse_genre_names(",".join(str(genre) for genre in genres))
+    return ", ".join(parsed)
+
+
 def init_db() -> None:
     """Create required tables."""
     with _get_conn() as conn:
@@ -35,6 +67,8 @@ def init_db() -> None:
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 name         TEXT    NOT NULL,
                 artist       TEXT    NOT NULL,
+                description  TEXT    NOT NULL DEFAULT '',
+                genres       TEXT    NOT NULL DEFAULT '',
                 added_by     TEXT    NOT NULL DEFAULT '',
                 filename     TEXT    NOT NULL,
                 times_played INTEGER NOT NULL DEFAULT 0,
@@ -75,9 +109,31 @@ def init_db() -> None:
                 PRIMARY KEY (user_id)
             )
             """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS genre_filter_state (
+                id   INTEGER PRIMARY KEY CHECK (id = 1),
+                mode TEXT    NOT NULL DEFAULT 'all'
+            )
+            """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS genre_filter_entries (
+                genre TEXT PRIMARY KEY
+            )
+            """)
+        conn.execute(
+            """
+            INSERT INTO genre_filter_state (id, mode)
+            VALUES (1, ?)
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (GENRE_FILTER_MODE_ALL,),
+        )
+        _ensure_column(conn, "songs", "description", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "songs", "genres", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "ads", "name", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "ads", "sponsor", "TEXT NOT NULL DEFAULT 'Unknown'")
         _ensure_column(conn, "ads", "added_by", "TEXT NOT NULL DEFAULT ''")
+        _normalize_song_genres(conn)
         _ensure_vote_cooldown_user_uniqueness(conn)
         _purge_reserved_media_rows(conn)
         conn.commit()
@@ -124,6 +180,81 @@ def _purge_reserved_media_rows(conn: sqlite3.Connection) -> None:
         conn.execute(f"DELETE FROM {table} WHERE {reserved_filter}")
 
 
+def _normalize_song_genres(conn: sqlite3.Connection) -> None:
+    """Normalize stored song genre strings after schema upgrades."""
+    rows = conn.execute("SELECT id, genres FROM songs").fetchall()
+    for row in rows:
+        serialized = serialize_genre_names(row["genres"])
+        if serialized == row["genres"]:
+            continue
+        conn.execute(
+            "UPDATE songs SET genres = ? WHERE id = ?",
+            (serialized, row["id"]),
+        )
+
+
+def _get_genre_filter_state(conn: sqlite3.Connection) -> tuple[str, set[str]]:
+    """Return the current daily genre-filter mode and tracked genres."""
+    row = conn.execute("SELECT mode FROM genre_filter_state WHERE id = 1").fetchone()
+    mode = str(row["mode"]) if row else GENRE_FILTER_MODE_ALL
+    entries = conn.execute(
+        "SELECT genre FROM genre_filter_entries ORDER BY genre"
+    ).fetchall()
+    return mode, {str(entry["genre"]) for entry in entries}
+
+
+def _set_genre_filter_state(
+    conn: sqlite3.Connection,
+    mode: str,
+    genres: Iterable[str],
+) -> None:
+    """Persist the current daily genre-filter state."""
+    normalized = parse_genre_names(",".join(genres))
+    conn.execute(
+        """
+        INSERT INTO genre_filter_state (id, mode)
+        VALUES (1, ?)
+        ON CONFLICT(id) DO UPDATE SET mode = excluded.mode
+        """,
+        (mode,),
+    )
+    conn.execute("DELETE FROM genre_filter_entries")
+    conn.executemany(
+        "INSERT INTO genre_filter_entries (genre) VALUES (?)",
+        [(genre,) for genre in normalized],
+    )
+
+
+def get_daily_genre_filter() -> dict:
+    """Return the current daily genre-filter mode and genres."""
+    with _get_conn() as conn:
+        mode, genres = _get_genre_filter_state(conn)
+    return {"mode": mode, "genres": sorted(genres)}
+
+
+def _song_matches_daily_genres(song: dict, mode: str, tracked_genres: set[str]) -> bool:
+    """Return whether a song remains playable under the current daily filter."""
+    if mode == GENRE_FILTER_MODE_ALL or not tracked_genres:
+        return True
+    song_genres = set(parse_genre_names(song.get("genres", "")))
+    if mode == GENRE_FILTER_MODE_INCLUDE:
+        return bool(song_genres & tracked_genres)
+    if not song_genres:
+        return True
+    return not song_genres.issubset(tracked_genres)
+
+
+def _apply_daily_genre_filter(songs: list[dict]) -> list[dict]:
+    """Filter songs according to the current daily genre settings."""
+    with _get_conn() as conn:
+        mode, tracked_genres = _get_genre_filter_state(conn)
+    return [
+        song
+        for song in songs
+        if _song_matches_daily_genres(song, mode, tracked_genres)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Songs
 # ---------------------------------------------------------------------------
@@ -135,7 +266,7 @@ def get_all_songs() -> list[dict]:
         rows = conn.execute(
             "SELECT * FROM songs WHERE available = 1 ORDER BY id"
         ).fetchall()
-    return [dict(row) for row in rows]
+    return _apply_daily_genre_filter([dict(row) for row in rows])
 
 
 def get_all_songs_admin() -> list[dict]:
@@ -180,6 +311,19 @@ def search_songs(field: str, query: str) -> list[dict]:
     """Search songs by supported field name. ID queries include disabled songs."""
     if field not in SEARCHABLE_FIELDS:
         return []
+    if field == "genre":
+        target_genre = normalize_genre_name(query)
+        if not target_genre:
+            return []
+        with _get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM songs WHERE available = 1 ORDER BY id"
+            ).fetchall()
+        return [
+            dict(row)
+            for row in rows
+            if target_genre in parse_genre_names(row["genres"])
+        ]
     with _get_conn() as conn:
         if field == "id":
             try:
@@ -197,17 +341,73 @@ def search_songs(field: str, query: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def add_song(name: str, artist: str, filename: str, added_by: str = "") -> int:
+def add_song(
+    name: str,
+    artist: str,
+    filename: str,
+    added_by: str = "",
+    *,
+    description: str = "",
+    genres: str = "",
+) -> int:
     """Insert a new song and return its generated database ID."""
     if _is_reserved_media_filename(filename):
         raise ValueError(f"Reserved media filename is not allowed: {filename}")
     with _get_conn() as conn:
         cursor = conn.execute(
-            "INSERT INTO songs (name, artist, filename, added_by) VALUES (?, ?, ?, ?)",
-            (name, artist, filename, added_by),
+            (
+                "INSERT INTO songs (name, artist, description, genres, filename, added_by) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
+            ),
+            (
+                name,
+                artist,
+                description.strip(),
+                serialize_genre_names(genres),
+                filename,
+                added_by,
+            ),
         )
         conn.commit()
         return cursor.lastrowid  # type: ignore[return-value]
+
+
+def update_song_metadata(
+    song_id: int,
+    *,
+    name: str,
+    description: str,
+    genres: str,
+    available: bool,
+    added_by: str,
+) -> Optional[dict]:
+    """Update editable song metadata and return the refreshed row."""
+    with _get_conn() as conn:
+        row = conn.execute("SELECT * FROM songs WHERE id = ?", (song_id,)).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            """
+            UPDATE songs
+            SET name = ?,
+                description = ?,
+                genres = ?,
+                available = ?,
+                added_by = ?
+            WHERE id = ?
+            """,
+            (
+                name.strip(),
+                description.strip(),
+                serialize_genre_names(genres),
+                1 if available else 0,
+                added_by,
+                song_id,
+            ),
+        )
+        conn.commit()
+        refreshed = conn.execute("SELECT * FROM songs WHERE id = ?", (song_id,)).fetchone()
+    return dict(refreshed) if refreshed else None
 
 
 def deactivate_song(song_id: int) -> Optional[dict]:
@@ -326,6 +526,50 @@ def reset_negative_vote_scores() -> None:
     with _get_conn() as conn:
         conn.execute("UPDATE songs SET vote_score = 0 WHERE vote_score < 0")
         conn.commit()
+
+
+def enable_daily_genres(genres: str | Iterable[str]) -> dict:
+    """Enable genres for the day, either exclusively or by re-enabling disabled ones."""
+    requested = parse_genre_names(genres if isinstance(genres, str) else ",".join(genres))
+    if not requested:
+        return get_daily_genre_filter()
+    requested_set = set(requested)
+    with _get_conn() as conn:
+        mode, tracked_genres = _get_genre_filter_state(conn)
+        if mode == GENRE_FILTER_MODE_EXCLUDE and requested_set.issubset(tracked_genres):
+            remaining = tracked_genres - requested_set
+            next_mode = GENRE_FILTER_MODE_EXCLUDE if remaining else GENRE_FILTER_MODE_ALL
+            _set_genre_filter_state(conn, next_mode, remaining)
+        else:
+            _set_genre_filter_state(conn, GENRE_FILTER_MODE_INCLUDE, requested)
+        conn.commit()
+    return get_daily_genre_filter()
+
+
+def disable_daily_genres(genres: str | Iterable[str]) -> dict:
+    """Disable genres for the day while keeping all other genres active."""
+    requested = parse_genre_names(genres if isinstance(genres, str) else ",".join(genres))
+    if not requested:
+        return get_daily_genre_filter()
+    requested_set = set(requested)
+    with _get_conn() as conn:
+        mode, tracked_genres = _get_genre_filter_state(conn)
+        if mode == GENRE_FILTER_MODE_INCLUDE:
+            _set_genre_filter_state(
+                conn,
+                GENRE_FILTER_MODE_INCLUDE,
+                tracked_genres - requested_set,
+            )
+        elif mode == GENRE_FILTER_MODE_EXCLUDE:
+            _set_genre_filter_state(
+                conn,
+                GENRE_FILTER_MODE_EXCLUDE,
+                tracked_genres | requested_set,
+            )
+        else:
+            _set_genre_filter_state(conn, GENRE_FILTER_MODE_EXCLUDE, requested)
+        conn.commit()
+    return get_daily_genre_filter()
 
 
 # ---------------------------------------------------------------------------

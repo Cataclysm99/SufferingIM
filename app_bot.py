@@ -187,7 +187,7 @@ def _help_tutorial_embed() -> discord.Embed:
         name="2) Browse songs",
         value=(
             "Use **📋 Playlist** on the controller for the active song list.\n"
-            "Slash commands: **`/playlist`** and **`/search`**."
+            "Slash commands: **`/playlist`**, **`/search`**, and **`/genres_today`**."
         ),
         inline=False,
     )
@@ -238,7 +238,18 @@ def _help_manager_tutorial_embed() -> discord.Embed:
             "**`/playlist_all`** — full song list including disabled entries.\n"
             "**`/ad_list`** / **`/broadcast_list`** — view ad and DJ libraries.\n"
             "**`/toggle_song`** / **`/toggle_song_id`** — enable or disable songs.\n"
-            "**`/delete_song_id`** — react-confirmed flow (✅ disable / 🗑️ delete / 🚫 cancel)."
+            "**`/delete_song_id`** — react-confirmed flow (✅ disable / 🗑️ delete / 🚫 cancel).\n"
+            "**`/manage_songs`** — dropdown editor for song name, description, genres, and availability."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Daily genre controls",
+        value=(
+            "**`/enable_genres`** — enable only selected genres, unless they were "
+            "previously disabled.\n"
+            "**`/disable_genres`** — disable selected genres while keeping others active.\n"
+            "**`/genres_today`** — show the current daily genre filter."
         ),
         inline=False,
     )
