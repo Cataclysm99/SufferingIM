@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from hashlib import sha256
 from pathlib import Path
 from typing import Iterable, Optional
 
-from config import ADS_DIR, ALLOWED_EXTENSIONS, DB_PATH, DJ_EVENTS_DIR
+from config import ADS_DIR, ALLOWED_EXTENSIONS, DB_PATH, DJ_EVENTS_DIR, SONGS_DIR
 
 SEARCHABLE_FIELDS = frozenset({"name", "artist", "added_by", "genre", "id"})
 
@@ -128,10 +129,12 @@ def init_db() -> None:
             (GENRE_FILTER_MODE_ALL,),
         )
         _ensure_column(conn, "songs", "genres", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "songs", "content_hash", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "ads", "name", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "ads", "sponsor", "TEXT NOT NULL DEFAULT 'Unknown'")
         _ensure_column(conn, "ads", "added_by", "TEXT NOT NULL DEFAULT ''")
         _normalize_song_genres(conn)
+        _backfill_song_content_hashes(conn)
         _ensure_vote_cooldown_user_uniqueness(conn)
         _purge_reserved_media_rows(conn)
         conn.commit()
@@ -188,6 +191,45 @@ def _normalize_song_genres(conn: sqlite3.Connection) -> None:
         conn.execute(
             "UPDATE songs SET genres = ? WHERE id = ?",
             (serialized, row["id"]),
+        )
+
+
+def _file_content_hash(path: Path) -> str:
+    """Return a deterministic SHA-256 hash for a file."""
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _backfill_song_content_hashes(conn: sqlite3.Connection) -> None:
+    """Populate missing song content_hash values for existing files."""
+    rows = conn.execute(
+        "SELECT id, filename FROM songs WHERE COALESCE(content_hash, '') = ''"
+    ).fetchall()
+    for row in rows:
+        filename = str(row["filename"]).strip()
+        if not filename:
+            continue
+        path = SONGS_DIR / filename
+        if not path.is_file():
+            continue
+        song_hash = _file_content_hash(path)
+        duplicate = conn.execute(
+            """
+            SELECT id
+            FROM songs
+            WHERE id != ? AND content_hash = ?
+            LIMIT 1
+            """,
+            (row["id"], song_hash),
+        ).fetchone()
+        if duplicate is not None:
+            continue
+        conn.execute(
+            "UPDATE songs SET content_hash = ? WHERE id = ?",
+            (song_hash, row["id"]),
         )
 
 
@@ -345,16 +387,28 @@ def add_song(
     filename: str,
     added_by: str = "",
     metadata: dict | None = None,
-) -> int:
-    """Insert a new song and return its generated database ID."""
+) -> int | None:
+    """Insert a new song and return its ID, or None when it is a duplicate."""
     if _is_reserved_media_filename(filename):
         raise ValueError(f"Reserved media filename is not allowed: {filename}")
     metadata = metadata or {}
+    content_hash = str(metadata.get("content_hash", "")).strip()
+    if not content_hash:
+        path = SONGS_DIR / filename
+        if path.is_file():
+            content_hash = _file_content_hash(path)
     with _get_conn() as conn:
+        if content_hash:
+            duplicate = conn.execute(
+                "SELECT id FROM songs WHERE content_hash = ? LIMIT 1",
+                (content_hash,),
+            ).fetchone()
+            if duplicate is not None:
+                return None
         cursor = conn.execute(
             (
-                "INSERT INTO songs (name, artist, genres, filename, added_by) "
-                "VALUES (?, ?, ?, ?, ?)"
+                "INSERT INTO songs (name, artist, genres, filename, added_by, content_hash) "
+                "VALUES (?, ?, ?, ?, ?, ?)"
             ),
             (
                 name,
@@ -362,6 +416,7 @@ def add_song(
                 serialize_genre_names(str(metadata.get("genres", ""))),
                 filename,
                 added_by,
+                content_hash,
             ),
         )
         conn.commit()

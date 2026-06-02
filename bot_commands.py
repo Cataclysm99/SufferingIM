@@ -193,7 +193,7 @@ def _store_media_record(
     file_path: Path,
     *,
     fallback_credit: str | None = None,
-) -> int:
+) -> int | None:
     """Persist one uploaded media file in its database table and return record ID."""
     display_name = (request.name or file_path.stem).strip() or file_path.stem
     credit = (request.credit or fallback_credit or "Unknown").strip() or "Unknown"
@@ -225,14 +225,13 @@ async def _store_downloaded_media(
     inserted_ids: list[int] = []
     failed_urls: list[str] = []
     skipped_titles: list[str] = []
-    target_dir = _target_dir(request)
 
     for url in youtube_urls:
         try:
             downloaded, playlist_title, url_skipped = await asyncio.to_thread(
                 download_youtube_audio,
                 url,
-                target_dir,
+                _target_dir(request),
                 False,
             )
         except (DownloadError, OSError) as exc:
@@ -244,14 +243,17 @@ async def _store_downloaded_media(
 
         for path in downloaded:
             try:
-                inserted_ids.append(
-                    _store_media_record(
-                        interaction,
-                        request,
-                        path,
-                        fallback_credit=playlist_title if request.kind == "song" else None,
-                    )
+                record_id = _store_media_record(
+                    interaction,
+                    request,
+                    path,
+                    fallback_credit=playlist_title if request.kind == "song" else None,
                 )
+                if record_id is None:
+                    if path.exists():
+                        path.unlink()
+                    continue
+                inserted_ids.append(record_id)
             except ValueError:
                 failed_urls.append(url)
                 continue
@@ -277,6 +279,10 @@ async def _store_uploaded_attachment(
         if destination.exists():
             destination.unlink()
         return [], "❌ Invalid reserved filename; upload was skipped."
+    if record_id is None:
+        if destination.exists():
+            destination.unlink()
+        return [], None
     return [record_id], None
 
 
