@@ -98,6 +98,15 @@ HEAVEN_BANNER_PATH: str = os.getenv(
 )
 CONTROLLER_STATE_PATH: Path = BASE_DIR / "controller_state.json"
 
+# ── yt-dlp authentication ─────────────────────────────────────────────────────
+# Path to a Netscape-format cookies file exported from your browser.
+# Leave blank to disable cookie-based auth.
+YTDLP_COOKIES_FILE: str = os.getenv("YTDLP_COOKIES_FILE", "").strip()
+
+# Browser to pull live cookies from (e.g. "chrome", "firefox", "edge", "safari").
+# Leave blank to disable. Overrides YTDLP_COOKIES_FILE when set.
+YTDLP_COOKIES_FROM_BROWSER: str = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
+
 # ── FFmpeg options ────────────────────────────────────────────────────────────
 FFMPEG_BEFORE_OPTIONS: str = (
     "-nostdin -thread_queue_size 1024 "

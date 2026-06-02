@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import yt_dlp
 
-from config import ALLOWED_EXTENSIONS
+from config import ALLOWED_EXTENSIONS, YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER
 
 _URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 _YOUTUBE_HOSTS = {
@@ -30,26 +31,62 @@ def is_youtube_url(url: str) -> bool:
     return host in _YOUTUBE_HOSTS
 
 
-def download_youtube_audio(
-    url: str,
-    target_dir: Path,
-    noplaylist: bool = False,
-) -> tuple[list[Path], str | None]:
-    """Download audio from a YouTube URL and return downloaded files plus playlist title."""
-    before = {path.name for path in target_dir.iterdir() if path.is_file()}
-    ydl_opts = {
+class DownloadResult(NamedTuple):
+    """Result of a YouTube download operation."""
+
+    downloaded: list[Path]
+    playlist_title: str | None
+    skipped_titles: list[str]
+
+
+def _build_ydl_opts(target_dir: Path, noplaylist: bool) -> dict:
+    """Build yt-dlp options dict, including cookies and error-handling settings."""
+    opts: dict = {
         "format": "bestaudio/best",
         "noplaylist": noplaylist,
         "quiet": True,
         "no_warnings": True,
         "restrictfilenames": True,
         "outtmpl": str(target_dir / "%(title).200B-%(id)s.%(ext)s"),
+        "ignoreerrors": True,
     }
+    if YTDLP_COOKIES_FROM_BROWSER:
+        opts["cookiesfrombrowser"] = (YTDLP_COOKIES_FROM_BROWSER,)
+    elif YTDLP_COOKIES_FILE:
+        opts["cookiefile"] = YTDLP_COOKIES_FILE
+    return opts
+
+
+def download_youtube_audio(
+    url: str,
+    target_dir: Path,
+    noplaylist: bool = False,
+) -> DownloadResult:
+    """Download audio from a YouTube URL.
+
+    Returns a :class:`DownloadResult` containing:
+    - *downloaded*: paths to newly-downloaded files whose extension is allowed.
+    - *playlist_title*: the playlist title when the URL is a playlist.
+    - *skipped_titles*: display titles (or IDs) of entries that were unavailable.
+    """
+    before = {path.name for path in target_dir.iterdir() if path.is_file()}
+    ydl_opts = _build_ydl_opts(target_dir, noplaylist)
+
     playlist_title: str | None = None
+    skipped_titles: list[str] = []
+
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url)
-        if isinstance(info, dict) and info.get("_type") == "playlist":
-            playlist_title = info.get("title") or None
+        if isinstance(info, dict):
+            if info.get("_type") == "playlist":
+                playlist_title = info.get("title") or None
+                for entry in info.get("entries", []):
+                    if entry is None:
+                        skipped_titles.append("(unknown)")
+                    elif entry.get("_type") == "ERROR" or not entry.get("id"):
+                        skipped_titles.append(
+                            entry.get("title") or entry.get("id") or "(unknown)"
+                        )
 
     added: list[Path] = []
     for path in sorted(target_dir.iterdir()):
@@ -57,4 +94,4 @@ def download_youtube_audio(
             continue
         if path.suffix.lower() in ALLOWED_EXTENSIONS:
             added.append(path)
-    return added, playlist_title
+    return DownloadResult(added, playlist_title, skipped_titles)

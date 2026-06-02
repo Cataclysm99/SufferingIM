@@ -218,17 +218,18 @@ def _store_media_record(
 async def _store_downloaded_media(
     interaction: discord.Interaction,
     request: _UploadRequest,
-) -> tuple[list[int], list[str], list[str]]:
+) -> tuple[list[int], list[str], list[str], list[str]]:
     """Download and store media from YouTube URLs."""
     urls = extract_urls(request.source or "")
     youtube_urls = [url for url in urls if is_youtube_url(url)]
     inserted_ids: list[int] = []
     failed_urls: list[str] = []
+    skipped_titles: list[str] = []
     target_dir = _target_dir(request)
 
     for url in youtube_urls:
         try:
-            downloaded, playlist_title = await asyncio.to_thread(
+            downloaded, playlist_title, url_skipped = await asyncio.to_thread(
                 download_youtube_audio,
                 url,
                 target_dir,
@@ -238,6 +239,8 @@ async def _store_downloaded_media(
             log.warning("yt-dlp download failed for %s: %s", url, exc)
             failed_urls.append(url)
             continue
+
+        skipped_titles.extend(url_skipped)
 
         for path in downloaded:
             try:
@@ -254,7 +257,7 @@ async def _store_downloaded_media(
                 continue
 
     ignored_urls = [url for url in urls if url not in youtube_urls]
-    return inserted_ids, ignored_urls, failed_urls
+    return inserted_ids, ignored_urls, failed_urls, skipped_titles
 
 
 async def _store_uploaded_attachment(
@@ -282,6 +285,7 @@ def _upload_summary(
     inserted_ids: list[int],
     ignored_urls: list[str],
     failed_urls: list[str],
+    skipped_titles: list[str] | None = None,
 ) -> str:
     """Build the final upload status message."""
     lines: list[str] = []
@@ -295,6 +299,9 @@ def _upload_summary(
         lines.append(f"⚠️ Ignored {len(ignored_urls)} non-YouTube URL(s).")
     if failed_urls:
         lines.append(f"⚠️ Failed to download {len(failed_urls)} YouTube URL(s).")
+    if skipped_titles:
+        for title in skipped_titles:
+            lines.append(f"⚠️ Skipped unavailable track: **{title}**")
     if not lines:
         lines.append("❌ No media was added.")
     return "\n".join(lines)
@@ -305,7 +312,7 @@ async def _handle_upload_song(
     request: _UploadRequest,
 ) -> str:
     """Process a validated upload request and return the status message."""
-    inserted_ids, ignored_urls, failed_urls = await _store_downloaded_media(
+    inserted_ids, ignored_urls, failed_urls, skipped_titles = await _store_downloaded_media(
         interaction,
         request,
     )
@@ -318,7 +325,7 @@ async def _handle_upload_song(
         sync_ads_from_disk()
     if request.kind == "broadcast" and inserted_ids:
         sync_broadcasts_from_disk()
-    return _upload_summary(request, inserted_ids, ignored_urls, failed_urls)
+    return _upload_summary(request, inserted_ids, ignored_urls, failed_urls, skipped_titles)
 
 
 def _register_controller_commands(bot: MusicBot) -> None:

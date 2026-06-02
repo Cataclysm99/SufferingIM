@@ -113,7 +113,7 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
 
         async def _process_upload() -> str:
             try:
-                downloaded, playlist_title = await asyncio.to_thread(
+                result = await asyncio.to_thread(
                     download_youtube_audio,
                     youtube_url,
                     SONGS_DIR,
@@ -122,7 +122,9 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
             except (DownloadError, OSError) as exc:
                 return f"❌ Could not download from YouTube: {exc}"
 
-            if not downloaded:
+            downloaded, playlist_title, skipped_titles = result
+
+            if not downloaded and not skipped_titles:
                 return (
                     "❌ Downloaded file type is not supported.\n"
                     f"Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
@@ -137,6 +139,9 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
                     artist=self.resolved_artist(playlist_title),
                 ),
             )
+            if skipped_titles:
+                for title in skipped_titles:
+                    lines.append(f"⚠️ Skipped unavailable track: **{title}**")
             if not lines and blocked_lines:
                 return "\n".join(blocked_lines)
             if blocked_lines:
