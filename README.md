@@ -141,7 +141,76 @@ On every transition to next track:
 
 ---
 
-## Commands (core)
+## YouTube authentication (private & restricted videos)
+
+By default the bot downloads public YouTube videos without any sign-in. If a playlist
+contains **private, age-restricted, or region-locked** videos, yt-dlp needs your YouTube
+cookies so it can authenticate on your behalf. Without cookies those tracks are skipped
+with a `⚠️ Skipped unavailable track` warning and the rest of the playlist still imports.
+
+There are two ways to supply cookies. Pick whichever suits your setup.
+
+---
+
+### Option A – Browser cookie file (recommended for servers / headless hosts)
+
+This exports a snapshot of your cookies from a browser you are already signed in to.
+
+1. **Install a browser extension** that exports cookies in Netscape format:
+   - Chrome / Edge / Brave: [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
+   - Firefox: [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
+
+2. **Sign in to YouTube** in that browser.
+
+3. **Export cookies** for `youtube.com`:
+   - In the extension, navigate to `youtube.com`, click the extension icon, and export.
+   - Save the file somewhere on the host machine, e.g. `/home/user/yt-cookies.txt`.
+
+4. **Set the env var** in your `.env`:
+   ```
+   YTDLP_COOKIES_FILE=/home/user/yt-cookies.txt
+   ```
+
+> **Tip:** Cookie files expire when your YouTube session expires. Re-export from the
+> browser if downloads start failing again. Keep the file out of version control — add
+> its path to `.gitignore`.
+
+---
+
+### Option B – Live browser cookie extraction (easiest for local machines)
+
+yt-dlp can read cookies directly from an installed browser's profile on the same machine
+the bot is running on. No file export needed, but the browser must be installed locally.
+
+Set `YTDLP_COOKIES_FROM_BROWSER` in your `.env` to the name of your browser:
+
+```
+YTDLP_COOKIES_FROM_BROWSER=chrome
+```
+
+Supported values: `chrome`, `chromium`, `firefox`, `edge`, `opera`, `safari`, `brave`, `vivaldi`
+
+When this is set it takes **priority over** `YTDLP_COOKIES_FILE`.
+
+> **Note for Linux servers:** Chrome/Chromium live-cookie extraction requires a running
+> display or a keyring daemon. If you hit errors, prefer Option A (cookie file) instead.
+
+---
+
+### Verifying it works
+
+After setting either option, try adding a private or members-only playlist via the
+**Add Song** modal or `/upload_song`. Songs that are still unavailable (deleted, blocked
+in your region even with auth, etc.) will be skipped with a warning, while the rest
+import normally.
+
+For more detail on cookie export see the official yt-dlp docs:
+- https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
+- https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies
+
+---
+
+
 
 - `/controller` – post control panel
 - `/helpless` – DM a quick tutorial and command list
@@ -176,3 +245,6 @@ Buttons mirror the same core actions.
 - Sunday/Monday branding settings:
   - `SUFFERING_BOT_NAME`, `HEAVEN_BOT_NAME`
   - optional avatar/banner paths
+- YouTube authentication (for private / restricted videos):
+  - `YTDLP_COOKIES_FILE` – path to a Netscape cookies file
+  - `YTDLP_COOKIES_FROM_BROWSER` – browser name (`chrome`, `firefox`, `edge`, etc.); takes priority over the file option
