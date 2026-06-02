@@ -297,17 +297,25 @@ def _upload_summary(
     lines: list[str] = []
     media_name = request.kind
     if inserted_ids:
+        shown_ids = ", ".join(map(str, inserted_ids[:20]))
+        extra_ids = len(inserted_ids) - min(len(inserted_ids), 20)
+        if extra_ids > 0:
+            shown_ids += f", … (+{extra_ids} more)"
         lines.append(
             "✅ Added "
-            f"{len(inserted_ids)} {media_name}(s). IDs: `{', '.join(map(str, inserted_ids))}`"
+            f"{len(inserted_ids)} {media_name}(s). IDs: `{shown_ids}`"
         )
     if ignored_urls:
         lines.append(f"⚠️ Ignored {len(ignored_urls)} non-YouTube URL(s).")
     if failed_urls:
         lines.append(f"⚠️ Failed to download {len(failed_urls)} YouTube URL(s).")
     if skipped_titles:
-        for title in skipped_titles:
-            lines.append(f"⚠️ Skipped unavailable track: **{title}**")
+        lines.append(f"⚠️ Skipped {len(skipped_titles)} unavailable track(s).")
+        for title in skipped_titles[:10]:
+            lines.append(f"• **{title}**")
+        hidden_titles = len(skipped_titles) - min(len(skipped_titles), 10)
+        if hidden_titles > 0:
+            lines.append(f"• … and {hidden_titles} more skipped track(s).")
     if not lines:
         lines.append("❌ No media was added.")
     return "\n".join(lines)
@@ -414,22 +422,30 @@ async def _send_upload_followup(
     interaction: discord.Interaction,
     request: _UploadRequest,
 ) -> None:
-    """Run upload processing and send the standard deferred follow-up."""
+    """Start upload processing and acknowledge immediately."""
     if not await _validate_upload_request(interaction, request):
         return
-    await interaction.response.defer(ephemeral=True)
     client = interaction.client  # type: ignore[attr-defined]
-    queue_position, message = await client.run_upload_with_queue(
-        lambda: _handle_upload_song(interaction, request)
+    queue_position = await client.start_upload_with_queue(
+        lambda: _handle_upload_song(interaction, request),
+        lambda _position, message: client.notify_upload_completion(
+            interaction,
+            f"✅ {request.kind.title()} upload complete.",
+            message,
+            filename=f"{request.kind}_upload_report.txt",
+        ),
     )
     lines: list[str] = []
+    lines.append(
+        f"⏳ {request.kind.title()} upload started. I'll DM you when it's done "
+        "and fall back to this channel if DMs are closed."
+    )
     if queue_position > 1:
         lines.append(
             "⏳ Another upload is already in progress. "
             f"Your request was queued at position **{queue_position}**."
         )
-    lines.append(message)
-    await interaction.followup.send(
+    await interaction.response.send_message(
         "\n".join(lines),
         ephemeral=True,
     )

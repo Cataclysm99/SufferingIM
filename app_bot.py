@@ -7,6 +7,7 @@ import json
 import logging
 import random
 from dataclasses import dataclass, field
+from io import BytesIO
 from pathlib import Path
 from typing import Awaitable, Callable
 
@@ -53,6 +54,7 @@ from views import (
 )
 
 log = logging.getLogger(__name__)
+_UPLOAD_NOTIFICATION_PREVIEW_LIMIT = 1500
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -417,6 +419,131 @@ class MusicBot(commands.Bot):
                     0,
                     self.state.upload_queue.pending_requests - 1,
                 )
+
+    async def start_upload_with_queue(
+        self,
+        worker: Callable[[], Awaitable[str]],
+        notifier: Callable[[int, str], Awaitable[None]],
+    ) -> int:
+        """Queue one upload operation and notify when it finishes."""
+        async with self.state.upload_queue.state_lock:
+            self.state.upload_queue.pending_requests += 1
+            queue_position = self.state.upload_queue.pending_requests
+
+        async def _runner() -> None:
+            try:
+                async with self.state.upload_queue.lock:
+                    message = await worker()
+            finally:
+                async with self.state.upload_queue.state_lock:
+                    self.state.upload_queue.pending_requests = max(
+                        0,
+                        self.state.upload_queue.pending_requests - 1,
+                    )
+            await notifier(queue_position, message)
+
+        task = asyncio.create_task(_runner())
+        task.add_done_callback(self._log_upload_task_failure)
+        return queue_position
+
+    @staticmethod
+    def _log_upload_task_failure(task: asyncio.Task[None]) -> None:
+        """Log unhandled upload task failures without breaking the queue."""
+        try:
+            task.result()
+        except (
+            discord.DiscordException,
+            OSError,
+            RuntimeError,
+            ValueError,
+        ):
+            log.exception("Queued upload task failed.")
+
+    @staticmethod
+    def _upload_report_file(filename: str, message: str) -> discord.File:
+        """Create a text attachment for a long upload report."""
+        report_bytes = message.encode("utf-8", errors="replace")
+        return discord.File(BytesIO(report_bytes), filename=filename)
+
+    @staticmethod
+    def _upload_notification_preview(title: str, message: str) -> str:
+        """Build a bounded message preview for long upload reports."""
+        lines = [line for line in message.splitlines() if line]
+        preview_lines: list[str] = []
+        total_length = len(title) + 1
+        for line in lines:
+            projected = total_length + len(line) + 1
+            if preview_lines and projected > _UPLOAD_NOTIFICATION_PREVIEW_LIMIT:
+                break
+            if not preview_lines and projected > _UPLOAD_NOTIFICATION_PREVIEW_LIMIT:
+                allowed = max(0, _UPLOAD_NOTIFICATION_PREVIEW_LIMIT - total_length - 2)
+                preview_lines.append(f"{line[:allowed]}…")
+                break
+            preview_lines.append(line)
+            total_length = projected
+        if not preview_lines:
+            preview_lines.append("The upload completed. Full report attached.")
+        remaining = len(lines) - len(preview_lines)
+        preview = "\n".join([title, *preview_lines])
+        if remaining > 0:
+            preview += f"\n📄 Full report attached ({remaining} more line(s))."
+        else:
+            preview += "\n📄 Full report attached."
+        return preview
+
+    async def notify_upload_completion(
+        self,
+        interaction: discord.Interaction,
+        title: str,
+        message: str,
+        *,
+        filename: str,
+    ) -> None:
+        """Deliver upload completion details outside the original interaction lifecycle."""
+        content = f"{title}\n{message}"
+        if len(content) <= 2000:
+            try:
+                await interaction.user.send(content)
+                return
+            except discord.Forbidden:
+                pass
+            except discord.DiscordException as exc:
+                log.warning("Could not DM upload completion to %s: %s", interaction.user.id, exc)
+        else:
+            preview = self._upload_notification_preview(title, message)
+            try:
+                await interaction.user.send(
+                    preview,
+                    file=self._upload_report_file(filename, message),
+                )
+                return
+            except discord.Forbidden:
+                pass
+            except discord.DiscordException as exc:
+                log.warning("Could not DM upload completion to %s: %s", interaction.user.id, exc)
+
+        channel = interaction.channel
+        if channel is None:
+            log.warning("Upload completion for %s had no channel fallback.", interaction.user.id)
+            return
+        try:
+            if len(content) <= 2000:
+                await channel.send(
+                    f"{interaction.user.mention} {content}",
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
+                return
+            await channel.send(
+                f"{interaction.user.mention} {self._upload_notification_preview(title, message)}",
+                file=self._upload_report_file(filename, message),
+                allowed_mentions=discord.AllowedMentions(users=True),
+            )
+        except discord.DiscordException as exc:
+            log.warning(
+                "Could not send upload completion fallback in channel for %s: %s",
+                interaction.user.id,
+                exc,
+            )
 
     def _controller_text_channel(self) -> discord.TextChannel | None:
         """Return the configured controller channel when available."""

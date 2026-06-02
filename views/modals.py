@@ -112,7 +112,6 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
             )
             return
 
-        await interaction.response.defer(ephemeral=True)
         client = interaction.client  # type: ignore[attr-defined]
 
         async def _process_upload() -> str:
@@ -152,13 +151,25 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
                 lines.extend(blocked_lines)
             return "\n".join(lines)
 
-        queue_position, message = await client.run_upload_with_queue(_process_upload)
+        queue_position = await client.start_upload_with_queue(
+            _process_upload,
+            lambda _position, message: client.notify_upload_completion(
+                interaction,
+                "✅ Song upload complete.",
+                message,
+                filename="song_upload_report.txt",
+            ),
+        )
+        lines = [
+            "⏳ Song upload started. I'll DM you when it's done and fall back to this "
+            "channel if DMs are closed."
+        ]
         if queue_position > 1:
-            message = (
+            lines.append(
                 "⏳ Another upload is already in progress. "
-                f"Your request was queued at position **{queue_position}**.\n{message}"
+                f"Your request was queued at position **{queue_position}**."
             )
-        await interaction.followup.send(message, ephemeral=True)
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 class DeleteSongModal(discord.ui.Modal, title="Delete Song"):
