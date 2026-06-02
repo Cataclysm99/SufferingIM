@@ -405,8 +405,19 @@ async def _send_upload_followup(
     if not await _validate_upload_request(interaction, request):
         return
     await interaction.response.defer(ephemeral=True)
+    client = interaction.client  # type: ignore[attr-defined]
+    queue_position, message = await client.run_upload_with_queue(
+        lambda: _handle_upload_song(interaction, request)
+    )
+    lines: list[str] = []
+    if queue_position > 1:
+        lines.append(
+            "⏳ Another upload is already in progress. "
+            f"Your request was queued at position **{queue_position}**."
+        )
+    lines.append(message)
     await interaction.followup.send(
-        await _handle_upload_song(interaction, request),
+        "\n".join(lines),
         ephemeral=True,
     )
 

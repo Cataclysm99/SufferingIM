@@ -6,11 +6,12 @@ import asyncio
 
 import discord
 
-from database import get_song
+from database import get_song, parse_genre_names
 
 from .constants import (
     COL_ADDED_BY,
     COL_ARTIST,
+    COL_GENRES,
     COL_ID,
     COL_NAME,
     REACT_CANCEL,
@@ -125,10 +126,11 @@ async def _build_full_song_rows(
         f"{'ID':<{COL_ID}} "
         f"{'Name':<{COL_NAME}} "
         f"{'Artist':<{COL_ARTIST}} "
+        f"{'Genres':<{COL_GENRES}} "
         f"{'Added By':<{COL_ADDED_BY}} "
         "Plays"
     )
-    divider = "─" * (COL_ID + COL_NAME + COL_ARTIST + COL_ADDED_BY + 18)
+    divider = "─" * (COL_ID + COL_NAME + COL_ARTIST + COL_GENRES + COL_ADDED_BY + 23)
     added_by_ids = [str(song.get("added_by", "")) for song in songs]
     display_names = added_by_ids
     if client is not None:
@@ -147,6 +149,7 @@ async def _build_full_song_rows(
             f"{song['id']:<{COL_ID}} "
             f"{name_str[:COL_NAME]:<{COL_NAME}} "
             f"{song['artist'][:COL_ARTIST]:<{COL_ARTIST}} "
+            f"{', '.join(parse_genre_names(song.get('genres', '')))[:COL_GENRES]:<{COL_GENRES}} "
             f"{added_by_str[:COL_ADDED_BY]:<{COL_ADDED_BY}} "
             f"{song['times_played']}"
         )

@@ -6,6 +6,7 @@ from __future__ import annotations
 COL_ID = 4
 COL_NAME = 20
 COL_ARTIST = 20
+COL_GENRES = 20
 COL_ADDED_BY = 20
 
 # Number of history messages to scan when searching for an existing controller.

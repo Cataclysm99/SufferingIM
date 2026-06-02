@@ -129,11 +129,15 @@ On every transition to next track:
 
 ### Database model
 - `init_db()` now creates required tables directly:
-  - `songs` (includes `description`, comma-separated `genres`, and `vote_score` fields)
+  - `songs` (includes comma-separated `genres` and `vote_score` fields)
   - `ads` (name/sponsor/uploader/play counters)
   - `broadcasts` (day/slot/name/sponsor/uploader/play counters)
   - `vote_cooldowns` (unique user_id cooldown tracking)
   - `genre_filter_state` / `genre_filter_entries` (daily genre include/exclude controls)
+
+### Upload request handling
+- Upload requests are serialized through an in-memory queue to avoid concurrent
+  playlist/song import races.
 
 ---
 

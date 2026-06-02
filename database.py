@@ -67,7 +67,6 @@ def init_db() -> None:
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
                 name         TEXT    NOT NULL,
                 artist       TEXT    NOT NULL,
-                description  TEXT    NOT NULL DEFAULT '',
                 genres       TEXT    NOT NULL DEFAULT '',
                 added_by     TEXT    NOT NULL DEFAULT '',
                 filename     TEXT    NOT NULL,
@@ -128,7 +127,6 @@ def init_db() -> None:
             """,
             (GENRE_FILTER_MODE_ALL,),
         )
-        _ensure_column(conn, "songs", "description", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "songs", "genres", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "ads", "name", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "ads", "sponsor", "TEXT NOT NULL DEFAULT 'Unknown'")
@@ -355,13 +353,12 @@ def add_song(
     with _get_conn() as conn:
         cursor = conn.execute(
             (
-                "INSERT INTO songs (name, artist, description, genres, filename, added_by) "
-                "VALUES (?, ?, ?, ?, ?, ?)"
+                "INSERT INTO songs (name, artist, genres, filename, added_by) "
+                "VALUES (?, ?, ?, ?, ?)"
             ),
             (
                 name,
                 artist,
-                str(metadata.get("description", "")).strip(),
                 serialize_genre_names(str(metadata.get("genres", ""))),
                 filename,
                 added_by,
@@ -378,7 +375,6 @@ def update_song_metadata(
 ) -> Optional[dict]:
     """Update editable song metadata and return the refreshed row."""
     name = str(updates.get("name", "")).strip()
-    description = str(updates.get("description", "")).strip()
     genres = serialize_genre_names(str(updates.get("genres", "")))
     available = bool(updates.get("available", True))
     with _get_conn() as conn:
@@ -389,7 +385,6 @@ def update_song_metadata(
             """
             UPDATE songs
             SET name = ?,
-                description = ?,
                 genres = ?,
                 available = ?,
                 added_by = ?
@@ -397,7 +392,6 @@ def update_song_metadata(
             """,
             (
                 name.strip(),
-                description.strip(),
                 serialize_genre_names(genres),
                 1 if available else 0,
                 added_by,

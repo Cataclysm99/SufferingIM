@@ -109,43 +109,47 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
             return
 
         await interaction.response.defer(ephemeral=True)
-        try:
-            downloaded, playlist_title = await asyncio.to_thread(
-                download_youtube_audio,
-                youtube_url,
-                SONGS_DIR,
-                False,
-            )
-        except (DownloadError, OSError) as exc:
-            await interaction.followup.send(
-                f"❌ Could not download from YouTube: {exc}",
-                ephemeral=True,
-            )
-            return
+        client = interaction.client  # type: ignore[attr-defined]
 
-        if not downloaded:
-            await interaction.followup.send(
-                "❌ Downloaded file type is not supported.\n"
-                f"Allowed: {', '.join(ALLOWED_EXTENSIONS)}",
-                ephemeral=True,
-            )
-            return
+        async def _process_upload() -> str:
+            try:
+                downloaded, playlist_title = await asyncio.to_thread(
+                    download_youtube_audio,
+                    youtube_url,
+                    SONGS_DIR,
+                    False,
+                )
+            except (DownloadError, OSError) as exc:
+                return f"❌ Could not download from YouTube: {exc}"
 
-        lines, blocked_lines = self.summarize_downloads(
-            downloaded,
-            _DownloadSummaryContext(
-                added_by=str(interaction.user.id),
-                is_manager=is_music_manager(interaction),
-                disabled_filenames=get_disabled_song_filenames(),
-                artist=self.resolved_artist(playlist_title),
-            ),
-        )
-        if not lines and blocked_lines:
-            await interaction.followup.send("\n".join(blocked_lines), ephemeral=True)
-            return
-        if blocked_lines:
-            lines.extend(blocked_lines)
-        await interaction.followup.send("\n".join(lines), ephemeral=True)
+            if not downloaded:
+                return (
+                    "❌ Downloaded file type is not supported.\n"
+                    f"Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
+                )
+
+            lines, blocked_lines = self.summarize_downloads(
+                downloaded,
+                _DownloadSummaryContext(
+                    added_by=str(interaction.user.id),
+                    is_manager=is_music_manager(interaction),
+                    disabled_filenames=get_disabled_song_filenames(),
+                    artist=self.resolved_artist(playlist_title),
+                ),
+            )
+            if not lines and blocked_lines:
+                return "\n".join(blocked_lines)
+            if blocked_lines:
+                lines.extend(blocked_lines)
+            return "\n".join(lines)
+
+        queue_position, message = await client.run_upload_with_queue(_process_upload)
+        if queue_position > 1:
+            message = (
+                "⏳ Another upload is already in progress. "
+                f"Your request was queued at position **{queue_position}**.\n{message}"
+            )
+        await interaction.followup.send(message, ephemeral=True)
 
 
 class DeleteSongModal(discord.ui.Modal, title="Delete Song"):

@@ -27,7 +27,6 @@ class _PendingSongUpdate:
     """Staged unsaved song edits for one song record."""
 
     name: str
-    description: str
     genres: str
     available: bool
 
@@ -54,12 +53,6 @@ class ManageSongEditModal(discord.ui.Modal, title="Edit Song"):
     """Stage editable song metadata before the user saves it."""
 
     name = discord.ui.TextInput(label="Song Name", max_length=100)
-    description = discord.ui.TextInput(
-        label="Description",
-        required=False,
-        style=discord.TextStyle.paragraph,
-        max_length=500,
-    )
     genres = discord.ui.TextInput(
         label="Genres (comma-separated)",
         required=False,
@@ -75,7 +68,6 @@ class ManageSongEditModal(discord.ui.Modal, title="Edit Song"):
         self.parent_view = parent_view
         snapshot = parent_view.selected_song_snapshot
         self.name.default = str(snapshot["name"])
-        self.description.default = str(snapshot.get("description", ""))
         self.genres.default = str(snapshot.get("genres", ""))
         self.available.default = "Y" if snapshot.get("available", 1) else "N"
 
@@ -90,7 +82,6 @@ class ManageSongEditModal(discord.ui.Modal, title="Edit Song"):
             return
         self.parent_view.stage_update(
             name=self.name.value.strip(),
-            description=self.description.value.strip(),
             genres=serialize_genre_names(self.genres.value),
             available=raw_available in {"y", "yes"},
         )
@@ -139,7 +130,6 @@ class ManageSongsView(discord.ui.View):
         song.update(
             {
                 "name": pending.name,
-                "description": pending.description,
                 "genres": pending.genres,
                 "available": 1 if pending.available else 0,
             }
@@ -176,19 +166,16 @@ class ManageSongsView(discord.ui.View):
         self,
         *,
         name: str,
-        description: str,
         genres: str,
         available: bool,
     ) -> None:
         """Store or discard the selected song's staged updates."""
         song = self.selected_song
         normalized_name = name.strip()
-        normalized_description = description.strip()
         normalized_genres = serialize_genre_names(genres)
         original_genres = serialize_genre_names(song.get("genres", ""))
         if (
             normalized_name == str(song["name"]).strip()
-            and normalized_description == str(song.get("description", "")).strip()
             and normalized_genres == original_genres
             and available == bool(song.get("available", 1))
         ):
@@ -196,7 +183,6 @@ class ManageSongsView(discord.ui.View):
         else:
             self._pending_updates[self.selected_song_id] = _PendingSongUpdate(
                 name=normalized_name,
-                description=normalized_description,
                 genres=normalized_genres,
                 available=available,
             )
@@ -226,11 +212,6 @@ class ManageSongsView(discord.ui.View):
         embed.add_field(
             name="Genres",
             value=", ".join(parse_genre_names(song.get("genres", ""))) or "None",
-            inline=False,
-        )
-        embed.add_field(
-            name="Description",
-            value=str(song.get("description", "")).strip() or "None",
             inline=False,
         )
         embed.add_field(
@@ -326,7 +307,6 @@ class ManageSongsView(discord.ui.View):
             self.selected_song_id,
             {
                 "name": pending.name,
-                "description": pending.description,
                 "genres": pending.genres,
                 "available": pending.available,
             },

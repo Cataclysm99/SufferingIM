@@ -6,8 +6,9 @@ import datetime
 import json
 import logging
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Awaitable, Callable
 
 import discord
 from discord.ext import commands
@@ -36,6 +37,7 @@ from database import (
     get_song,
     hard_delete_song,
     init_db,
+    parse_genre_names,
     sync_ads_from_disk,
     sync_broadcasts_from_disk,
 )
@@ -94,6 +96,15 @@ class _ControllerEmbedState:
 
 
 @dataclass(slots=True)
+class _UploadQueueState:
+    """Async queue state for serializing upload requests."""
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    state_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    pending_requests: int = 0
+
+
+@dataclass(slots=True)
 class _BotVisualState:
     """Mutable controller and branding state kept off the bot object itself."""
 
@@ -103,6 +114,7 @@ class _BotVisualState:
     branding_task: asyncio.Task[None] | None = None
     controller_song: dict | None = None
     controller_label: str | None = None
+    upload_queue: _UploadQueueState = field(default_factory=_UploadQueueState)
 
 
 class BrandingRateLimitError(RuntimeError):
@@ -123,6 +135,9 @@ def _controller_embed(state: _ControllerEmbedState) -> discord.Embed:
         else:
             artist = state.song.get("artist", "Unknown")
             now_playing_line = f"**{state.song['name']}** — **{artist}**"
+            genres = ", ".join(parse_genre_names(state.song.get("genres", "")))
+            if genres:
+                now_playing_line += f"\n🎼 Genres: {genres}"
         embed.add_field(
             name=status,
             value=now_playing_line,
@@ -162,6 +177,9 @@ def _shady_controller_embed(state: _ControllerEmbedState) -> discord.Embed:
             value = f"**{state.song['name']}** — sponsored by **{sponsor}**"
         else:
             value = f"**{state.song['name']}** — **{state.song.get('artist', 'Unknown')}**"
+            genres = ", ".join(parse_genre_names(state.song.get("genres", "")))
+            if genres:
+                value += f"\n🎼 Genres: {genres}"
         embed.add_field(name=status, value=value, inline=False)
     elif state.label:
         embed.add_field(name=status, value=f"🎵 {state.label.title()}", inline=False)
@@ -239,8 +257,7 @@ def _help_manager_tutorial_embed() -> discord.Embed:
             "**`/ad_list`** / **`/broadcast_list`** — view ad and DJ libraries.\n"
             "**`/toggle_song`** / **`/toggle_song_id`** — enable or disable songs.\n"
             "**`/delete_song_id`** — react-confirmed flow (✅ disable / 🗑️ delete / 🚫 cancel).\n"
-            "**`/manage_songs`** — dropdown editor for song name, description, "
-            "genres, and availability."
+            "**`/manage_songs`** — dropdown editor for song name, genres, and availability."
         ),
         inline=False,
     )
@@ -382,6 +399,24 @@ class MusicBot(commands.Bot):
         self.player.on_track_start = self.update_controller_now_playing
         await self.announce_state(channel=self._controller_text_channel())
         await self._ensure_controller()
+
+    async def run_upload_with_queue(
+        self,
+        worker: Callable[[], Awaitable[str]],
+    ) -> tuple[int, str]:
+        """Queue one upload operation and run it once earlier requests finish."""
+        async with self.state.upload_queue.state_lock:
+            self.state.upload_queue.pending_requests += 1
+            queue_position = self.state.upload_queue.pending_requests
+        try:
+            async with self.state.upload_queue.lock:
+                return queue_position, await worker()
+        finally:
+            async with self.state.upload_queue.state_lock:
+                self.state.upload_queue.pending_requests = max(
+                    0,
+                    self.state.upload_queue.pending_requests - 1,
+                )
 
     def _controller_text_channel(self) -> discord.TextChannel | None:
         """Return the configured controller channel when available."""
