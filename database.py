@@ -391,7 +391,7 @@ def update_song_metadata(
             WHERE id = ?
             """,
             (
-                name.strip(),
+                name,
                 serialize_genre_names(genres),
                 1 if available else 0,
                 added_by,
