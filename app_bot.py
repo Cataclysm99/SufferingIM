@@ -55,6 +55,7 @@ from views import (
 
 log = logging.getLogger(__name__)
 _UPLOAD_NOTIFICATION_PREVIEW_LIMIT = 1500
+_DISCORD_MESSAGE_LIMIT = 2000
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -121,6 +122,54 @@ class _BotVisualState:
 
 class BrandingRateLimitError(RuntimeError):
     """Raised when Discord profile edits are rate-limited."""
+
+
+def _split_discord_message_lines(
+    message: str,
+    *,
+    limit: int = _DISCORD_MESSAGE_LIMIT,
+) -> list[str]:
+    """Split content into Discord-safe chunks, preferring line boundaries."""
+    chunks: list[str] = []
+    current = ""
+    for line in message.split("\n"):
+        candidate = line if not current else f"{current}\n{line}"
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+        if current:
+            chunks.append(current)
+            current = ""
+        while len(line) > limit:
+            chunks.append(line[:limit])
+            line = line[limit:]
+        current = line
+    if current or not chunks:
+        chunks.append(current)
+    return chunks
+
+
+async def send_chunked_interaction_message(
+    interaction: discord.Interaction,
+    content: str,
+    *,
+    ephemeral: bool = False,
+) -> None:
+    """Send long interaction content across multiple Discord messages."""
+    chunks = _split_discord_message_lines(content)
+    await interaction.response.send_message(chunks[0], ephemeral=ephemeral)
+    for chunk in chunks[1:]:
+        await interaction.followup.send(chunk, ephemeral=ephemeral)
+
+
+async def send_chunked_channel_message(
+    channel: discord.abc.Messageable,
+    content: str,
+    **send_kwargs: object,
+) -> None:
+    """Send long channel content across multiple Discord messages."""
+    for chunk in _split_discord_message_lines(content):
+        await channel.send(chunk, **send_kwargs)
 
 
 def _controller_embed(state: _ControllerEmbedState) -> discord.Embed:
@@ -789,7 +838,10 @@ class MusicBot(commands.Bot):
             target_channel = self.controller_message.channel if self.controller_message else None
         if target_channel is None:
             return
-        await target_channel.send(await self.state_announcement())
+        await send_chunked_channel_message(
+            target_channel,
+            await self.state_announcement(),
+        )
 
     async def submit_current_song_feedback(
         self,

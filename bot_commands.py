@@ -14,7 +14,13 @@ import discord
 from discord import app_commands
 from yt_dlp.utils import DownloadError
 
-from app_bot import MusicBot, _help_manager_tutorial_embed, _help_tutorial_embed, _unique_path
+from app_bot import (
+    MusicBot,
+    _help_manager_tutorial_embed,
+    _help_tutorial_embed,
+    _unique_path,
+    send_chunked_interaction_message,
+)
 from broadcast import DAYS as DJ_DAYS
 from config import ADS_DIR, ALLOWED_EXTENSIONS, DJ_EVENTS_DIR, SONGS_DIR
 from database import (
@@ -915,7 +921,10 @@ async def _handle_persona_switch(
             ephemeral=True,
         )
         return
-    await interaction.response.send_message(await bot.state_announcement())
+    await send_chunked_interaction_message(
+        interaction,
+        await bot.state_announcement(),
+    )
 
 
 async def _start_purge_confirmation(
