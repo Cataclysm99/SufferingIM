@@ -94,6 +94,8 @@ class AddSongModal(discord.ui.Modal, title="Add Song"):
                 song_id = add_song(name, context.artist, track.name, context.added_by)
             except ValueError:
                 blocked_lines.append(f"⛔ Skipped invalid filename: `{track.name}`.")
+                if track.exists():
+                    track.unlink()
                 continue
             if song_id is None:
                 if track.exists():

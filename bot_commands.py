@@ -261,6 +261,8 @@ async def _store_downloaded_media(
                     continue
                 inserted_ids.append(record_id)
             except ValueError:
+                if path.exists():
+                    path.unlink()
                 failed_urls.append(url)
                 continue
 
