@@ -107,6 +107,12 @@ YTDLP_COOKIES_FILE: str = os.getenv("YTDLP_COOKIES_FILE", "").strip()
 # Leave blank to disable. Overrides YTDLP_COOKIES_FILE when set.
 YTDLP_COOKIES_FROM_BROWSER: str = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
 
+# Cookie usage mode for yt-dlp requests:
+# - "always": always include configured cookies
+# - "fallback": try anonymous first, then retry with cookies for auth-gated failures
+# - "off": never use cookies, even when configured
+YTDLP_COOKIE_MODE: str = os.getenv("YTDLP_COOKIE_MODE", "fallback").strip().lower()
+
 # Optional YouTube URL used to verify age-gated auth at startup.
 # Leave blank to skip the startup auth probe.
 YTDLP_AUTH_TEST_URL: str = os.getenv("YTDLP_AUTH_TEST_URL", "").strip()

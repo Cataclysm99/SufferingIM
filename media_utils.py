@@ -12,6 +12,7 @@ from yt_dlp.utils import DownloadError
 from config import (
     ALLOWED_EXTENSIONS,
     YTDLP_AUTH_TEST_URL,
+    YTDLP_COOKIE_MODE,
     YTDLP_COOKIES_FILE,
     YTDLP_COOKIES_FROM_BROWSER,
 )
@@ -32,6 +33,20 @@ _AUTH_COOKIE_NAMES = (
     "SAPISID",
     "__Secure-1PSID",
     "__Secure-3PSID",
+)
+_COOKIE_MODES = frozenset({"always", "fallback", "off"})
+_AUTH_GATED_ERROR_HINTS = (
+    "private video",
+    "this video is private",
+    "login required",
+    "sign in",
+    "age-restricted",
+    "members-only",
+    "members only",
+)
+_RATE_LIMIT_ERROR_HINTS = (
+    "current session has been rate-limited",
+    "rate-limited by youtube",
 )
 
 log = logging.getLogger(__name__)
@@ -56,8 +71,22 @@ class DownloadResult(NamedTuple):
     skipped_titles: list[str]
 
 
-def _build_ydl_opts(target_dir: Path, noplaylist: bool) -> dict:
-    """Build yt-dlp options dict, including cookies and error-handling settings."""
+def _normalized_cookie_mode() -> str:
+    """Return the validated cookie usage mode, defaulting invalid values to fallback."""
+    mode = YTDLP_COOKIE_MODE.casefold().strip()
+    if mode in _COOKIE_MODES:
+        return mode
+    log.warning("yt-dlp auth: invalid YTDLP_COOKIE_MODE '%s'; using 'fallback'.", YTDLP_COOKIE_MODE)
+    return "fallback"
+
+
+def _has_cookie_source() -> bool:
+    """Return True when either cookie source is configured."""
+    return bool(YTDLP_COOKIES_FROM_BROWSER or YTDLP_COOKIES_FILE)
+
+
+def _build_ydl_opts(target_dir: Path, noplaylist: bool, include_cookies: bool) -> dict:
+    """Build yt-dlp options dict with optional cookies and error-handling settings."""
     opts: dict = {
         "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio[ext=opus]/bestaudio/best",
         "noplaylist": noplaylist,
@@ -67,9 +96,9 @@ def _build_ydl_opts(target_dir: Path, noplaylist: bool) -> dict:
         "outtmpl": str(target_dir / "%(title).200B-%(id)s.%(ext)s"),
         "ignoreerrors": True,
     }
-    if YTDLP_COOKIES_FROM_BROWSER:
+    if include_cookies and YTDLP_COOKIES_FROM_BROWSER:
         opts["cookiesfrombrowser"] = (YTDLP_COOKIES_FROM_BROWSER,)
-    elif YTDLP_COOKIES_FILE:
+    elif include_cookies and YTDLP_COOKIES_FILE:
         opts["cookiefile"] = YTDLP_COOKIES_FILE
     return opts
 
@@ -110,6 +139,17 @@ def _cookie_file_diagnostics() -> tuple[bool, str]:
 
 def log_ytdlp_auth_diagnostics() -> None:
     """Log yt-dlp authentication startup diagnostics."""
+    cookie_mode = _normalized_cookie_mode()
+    has_cookie_source = _has_cookie_source()
+    log.info("yt-dlp auth: cookie mode '%s'.", cookie_mode)
+
+    if cookie_mode == "off":
+        if has_cookie_source:
+            log.info("yt-dlp auth: cookie source configured but disabled by mode 'off'.")
+        else:
+            log.info("yt-dlp auth: no cookie source configured.")
+        return
+
     if YTDLP_COOKIES_FROM_BROWSER:
         log.info(
             "yt-dlp auth: using live browser cookies from '%s'.",
@@ -137,7 +177,7 @@ def log_ytdlp_auth_diagnostics() -> None:
         )
         return
 
-    ydl_opts = _build_ydl_opts(Path.cwd(), True)
+    ydl_opts = _build_ydl_opts(Path.cwd(), True, include_cookies=True)
     ydl_opts["skip_download"] = True
     ydl_opts["simulate"] = True
     try:
@@ -153,6 +193,39 @@ def log_ytdlp_auth_diagnostics() -> None:
     log.info("yt-dlp auth: startup age-check passed for %s.", YTDLP_AUTH_TEST_URL)
 
 
+def _extract_download_info(url: str, ydl_opts: dict) -> tuple[str | None, list[str]]:
+    """Run yt-dlp extraction and return playlist title plus unavailable-entry labels."""
+    playlist_title: str | None = None
+    skipped_titles: list[str] = []
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url)
+        if isinstance(info, dict):
+            if info.get("_type") == "playlist":
+                playlist_title = info.get("title") or None
+                for entry in info.get("entries", []):
+                    if entry is None:
+                        skipped_titles.append("(unknown)")
+                    elif entry.get("_type") == "ERROR" or not entry.get("id"):
+                        skipped_titles.append(
+                            entry.get("title") or entry.get("id") or "(unknown)"
+                        )
+    return playlist_title, skipped_titles
+
+
+def _is_rate_limited_error(exc: DownloadError) -> bool:
+    """Return True when the yt-dlp error text looks like a rate-limit failure."""
+    error_text = str(exc).casefold()
+    return any(hint in error_text for hint in _RATE_LIMIT_ERROR_HINTS)
+
+
+def _is_auth_gated_error(exc: DownloadError) -> bool:
+    """Return True when the yt-dlp error text indicates auth-protected content."""
+    if _is_rate_limited_error(exc):
+        return False
+    error_text = str(exc).casefold()
+    return any(hint in error_text for hint in _AUTH_GATED_ERROR_HINTS)
+
+
 def download_youtube_audio(
     url: str,
     target_dir: Path,
@@ -166,23 +239,25 @@ def download_youtube_audio(
     - *skipped_titles*: display titles (or IDs) of entries that were unavailable.
     """
     before = {path.name for path in target_dir.iterdir() if path.is_file()}
-    ydl_opts = _build_ydl_opts(target_dir, noplaylist)
+    cookie_mode = _normalized_cookie_mode()
+    has_cookie_source = _has_cookie_source()
+    use_cookies = cookie_mode == "always" and has_cookie_source
+    ydl_opts = _build_ydl_opts(target_dir, noplaylist, include_cookies=use_cookies)
 
-    playlist_title: str | None = None
-    skipped_titles: list[str] = []
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url)
-        if isinstance(info, dict):
-            if info.get("_type") == "playlist":
-                playlist_title = info.get("title") or None
-                for entry in info.get("entries", []):
-                    if entry is None:
-                        skipped_titles.append("(unknown)")
-                    elif entry.get("_type") == "ERROR" or not entry.get("id"):
-                        skipped_titles.append(
-                            entry.get("title") or entry.get("id") or "(unknown)"
-                        )
+    try:
+        playlist_title, skipped_titles = _extract_download_info(url, ydl_opts)
+    except DownloadError as exc:
+        should_retry_with_cookies = (
+            cookie_mode == "fallback"
+            and has_cookie_source
+            and _is_auth_gated_error(exc)
+        )
+        if should_retry_with_cookies:
+            log.info("yt-dlp download retrying with cookies after auth-gated failure: %s", url)
+            retry_opts = _build_ydl_opts(target_dir, noplaylist, include_cookies=True)
+            playlist_title, skipped_titles = _extract_download_info(url, retry_opts)
+        else:
+            raise
 
     added: list[Path] = []
     for path in sorted(target_dir.iterdir()):

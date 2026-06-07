@@ -197,6 +197,19 @@ When this is set it takes **priority over** `YTDLP_COOKIES_FILE`.
 
 ---
 
+### Cookie usage mode
+
+Control when yt-dlp uses configured cookies with `YTDLP_COOKIE_MODE`:
+
+- `fallback` (default): try anonymous requests first, then retry with cookies only when
+  yt-dlp returns an auth-gated failure (private/sign-in/age-restricted style errors)
+- `always`: always send configured cookies
+- `off`: never send cookies, even if cookie sources are configured
+
+For rate-limit style failures, fallback mode does **not** retry with cookies.
+
+---
+
 ### Verifying it works
 
 After setting either option, try adding a private or members-only playlist via the
@@ -256,3 +269,4 @@ Buttons mirror the same core actions.
 - YouTube authentication (for private / restricted videos):
   - `YTDLP_COOKIES_FILE` – path to a Netscape cookies file
   - `YTDLP_COOKIES_FROM_BROWSER` – browser name (`chrome`, `firefox`, `edge`, etc.); takes priority over the file option
+  - `YTDLP_COOKIE_MODE` – cookie usage mode (`fallback`, `always`, or `off`)
