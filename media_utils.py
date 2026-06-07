@@ -1,13 +1,20 @@
 """media_utils.py – shared YouTube URL parsing and download helpers."""
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import NamedTuple
 
 import yt_dlp
+from yt_dlp.utils import DownloadError
 
-from config import ALLOWED_EXTENSIONS, YTDLP_COOKIES_FILE, YTDLP_COOKIES_FROM_BROWSER
+from config import (
+    ALLOWED_EXTENSIONS,
+    YTDLP_AUTH_TEST_URL,
+    YTDLP_COOKIES_FILE,
+    YTDLP_COOKIES_FROM_BROWSER,
+)
 
 _URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
 _YOUTUBE_HOSTS = {
@@ -18,6 +25,16 @@ _YOUTUBE_HOSTS = {
     "youtu.be",
     "www.youtu.be",
 }
+_AUTH_COOKIE_NAMES = (
+    "SID",
+    "HSID",
+    "SSID",
+    "SAPISID",
+    "__Secure-1PSID",
+    "__Secure-3PSID",
+)
+
+log = logging.getLogger(__name__)
 
 
 def extract_urls(text: str) -> list[str]:
@@ -55,6 +72,81 @@ def _build_ydl_opts(target_dir: Path, noplaylist: bool) -> dict:
     elif YTDLP_COOKIES_FILE:
         opts["cookiefile"] = YTDLP_COOKIES_FILE
     return opts
+
+
+def _cookie_file_diagnostics() -> tuple[bool, str]:
+    """Return a startup status message for the configured cookie file."""
+    cookie_path = Path(YTDLP_COOKIES_FILE).expanduser()
+    if not cookie_path.exists():
+        return False, f"yt-dlp auth: cookie file not found: {cookie_path}"
+    if not cookie_path.is_file():
+        return False, f"yt-dlp auth: cookie path is not a file: {cookie_path}"
+    try:
+        lines = cookie_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return False, f"yt-dlp auth: could not read cookie file {cookie_path}: {exc}"
+
+    cookie_rows = [line for line in lines if line and not line.startswith("#")]
+    youtube_rows = [line for line in cookie_rows if "youtube.com" in line]
+    cookie_names = {
+        parts[5]
+        for parts in (row.split("\t") for row in youtube_rows)
+        if len(parts) >= 7
+    }
+    matched_names = sorted(name for name in _AUTH_COOKIE_NAMES if name in cookie_names)
+    details = (
+        f"yt-dlp auth: cookie file readable: {cookie_path} "
+        f"({len(youtube_rows)} youtube cookie row(s)"
+    )
+    if matched_names:
+        joined_names = ", ".join(matched_names)
+        return True, f"{details}; auth cookies: {joined_names})"
+    return True, f"{details}; auth cookies not detected)"
+
+
+def log_ytdlp_auth_diagnostics() -> None:
+    """Log yt-dlp authentication startup diagnostics."""
+    if YTDLP_COOKIES_FROM_BROWSER:
+        log.info(
+            "yt-dlp auth: using live browser cookies from '%s'.",
+            YTDLP_COOKIES_FROM_BROWSER,
+        )
+        if YTDLP_COOKIES_FILE:
+            log.info(
+                "yt-dlp auth: browser-cookie mode overrides cookie file '%s'.",
+                YTDLP_COOKIES_FILE,
+            )
+    elif YTDLP_COOKIES_FILE:
+        cookies_ok, cookie_message = _cookie_file_diagnostics()
+        if cookies_ok:
+            log.info(cookie_message)
+        else:
+            log.warning(cookie_message)
+    else:
+        log.info("yt-dlp auth: no cookie source configured.")
+        return
+
+    if not YTDLP_AUTH_TEST_URL:
+        log.info(
+            "yt-dlp auth: startup age-check skipped; set YTDLP_AUTH_TEST_URL "
+            "to an age-restricted YouTube URL to verify authenticated access.",
+        )
+        return
+
+    ydl_opts = _build_ydl_opts(Path.cwd(), True)
+    ydl_opts["skip_download"] = True
+    ydl_opts["simulate"] = True
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.extract_info(YTDLP_AUTH_TEST_URL, download=False)
+    except (DownloadError, OSError, ValueError) as exc:
+        log.warning(
+            "yt-dlp auth: startup age-check failed for %s: %s",
+            YTDLP_AUTH_TEST_URL,
+            exc,
+        )
+        return
+    log.info("yt-dlp auth: startup age-check passed for %s.", YTDLP_AUTH_TEST_URL)
 
 
 def download_youtube_audio(

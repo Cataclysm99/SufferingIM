@@ -43,6 +43,7 @@ from database import (
     sync_broadcasts_from_disk,
 )
 from player import MusicPlayer
+from media_utils import log_ytdlp_auth_diagnostics
 from views import (
     CONTROLLER_SEARCH_LIMIT,
     REACT_CANCEL,
@@ -431,6 +432,7 @@ class MusicBot(commands.Bot):
         init_db()
         sync_ads_from_disk()
         sync_broadcasts_from_disk()
+        await asyncio.to_thread(log_ytdlp_auth_diagnostics)
         self.player.set_rigged_songs(list(RIGGED_SONG_IDS))
         self._load_controller_state()
         self._sync_controller_mode_from_persona_mode()

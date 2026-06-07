@@ -107,6 +107,10 @@ YTDLP_COOKIES_FILE: str = os.getenv("YTDLP_COOKIES_FILE", "").strip()
 # Leave blank to disable. Overrides YTDLP_COOKIES_FILE when set.
 YTDLP_COOKIES_FROM_BROWSER: str = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
 
+# Optional YouTube URL used to verify age-gated auth at startup.
+# Leave blank to skip the startup auth probe.
+YTDLP_AUTH_TEST_URL: str = os.getenv("YTDLP_AUTH_TEST_URL", "").strip()
+
 # ── FFmpeg options ────────────────────────────────────────────────────────────
 FFMPEG_BEFORE_OPTIONS: str = (
     "-nostdin -thread_queue_size 1024 "

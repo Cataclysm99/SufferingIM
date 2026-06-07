@@ -204,6 +204,16 @@ After setting either option, try adding a private or members-only playlist via t
 in your region even with auth, etc.) will be skipped with a warning, while the rest
 import normally.
 
+If you want an explicit startup check in the terminal, set:
+
+```env
+YTDLP_AUTH_TEST_URL=https://www.youtube.com/watch?v=...
+```
+
+Use one age-restricted YouTube URL that your account should be able to access.
+On startup the bot will log whether the cookie source was detected, whether the
+cookie file was readable, and whether the age-check probe succeeded.
+
 For more detail on cookie export see the official yt-dlp docs:
 - https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
 - https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies
