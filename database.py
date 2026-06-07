@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import re
 from hashlib import sha256
 from pathlib import Path
 from typing import Iterable, Optional
@@ -35,6 +36,19 @@ def _is_reserved_media_filename(filename: str) -> bool:
 def normalize_genre_name(raw_genre: str) -> str:
     """Normalize one genre label for storage and comparisons."""
     return " ".join(raw_genre.strip().lower().split())
+
+
+def _normalize_search_text(raw_text: str) -> str:
+    """Normalize search text so separators like underscores behave like spaces."""
+    return " ".join(re.sub(r"[\W_]+", " ", raw_text.casefold()).split())
+
+
+def _extract_artist_from_song_name(song_name: str) -> str:
+    """Extract an artist-like prefix from filenames such as Artist_-_Song_Title."""
+    parts = re.split(r"(?:_+-+_+|\s+-+\s+|\s+[–—]+\s+)", song_name, maxsplit=1)
+    if len(parts) < 2:
+        return ""
+    return _normalize_search_text(parts[0])
 
 
 def parse_genre_names(raw_genres: str | None) -> list[str]:
@@ -351,6 +365,8 @@ def search_songs(field: str, query: str) -> list[dict]:
     """Search songs by supported field name. ID queries include disabled songs."""
     if field not in SEARCHABLE_FIELDS:
         return []
+    normalized_query = _normalize_search_text(query)
+    results: list[dict] | None = None
     if field == "genre":
         target_genre = normalize_genre_name(query)
         if not target_genre:
@@ -359,26 +375,41 @@ def search_songs(field: str, query: str) -> list[dict]:
             rows = conn.execute(
                 "SELECT * FROM songs WHERE available = 1 ORDER BY id"
             ).fetchall()
-        return [
+        results = [
             dict(row)
             for row in rows
             if target_genre in parse_genre_names(row["genres"])
         ]
-    with _get_conn() as conn:
-        if field == "id":
-            try:
-                song_id = int(query)
-            except ValueError:
-                return []
+    elif field == "artist":
+        if not normalized_query:
+            return []
+        with _get_conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM songs WHERE id = ?",
-                (song_id,),
+                "SELECT * FROM songs WHERE available = 1 ORDER BY id"
             ).fetchall()
-        else:
-            rows = conn.execute(
-                _FIELD_SEARCH_QUERIES[field], (f"%{query}%",)
-            ).fetchall()
-    return [dict(row) for row in rows]
+        results = [
+            dict(row)
+            for row in rows
+            if normalized_query in _normalize_search_text(str(row["artist"]))
+            or normalized_query in _extract_artist_from_song_name(str(row["name"]))
+        ]
+    else:
+        with _get_conn() as conn:
+            if field == "id":
+                try:
+                    song_id = int(query)
+                except ValueError:
+                    return []
+                rows = conn.execute(
+                    "SELECT * FROM songs WHERE id = ?",
+                    (song_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    _FIELD_SEARCH_QUERIES[field], (f"%{query}%",)
+                ).fetchall()
+        results = [dict(row) for row in rows]
+    return results
 
 
 def add_song(
