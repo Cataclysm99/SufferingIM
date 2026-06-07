@@ -48,6 +48,11 @@ _RATE_LIMIT_ERROR_HINTS = (
     "current session has been rate-limited",
     "rate-limited by youtube",
 )
+_YTDLP_ERROR_DETAIL_RE = re.compile(
+    r"ERROR:\s*\[[^\]]+\]\s*([A-Za-z0-9_-]{6,}):\s*(.+)$",
+    re.IGNORECASE,
+)
+_YOUTUBE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 log = logging.getLogger(__name__)
 
@@ -283,6 +288,40 @@ def _captured_auth_gated_errors(captured_errors: list[str]) -> bool:
     return any(_error_text_is_auth_gated(error_text) for error_text in captured_errors)
 
 
+def _format_skipped_from_error(error_text: str) -> str:
+    """Format a yt-dlp error line into a user-facing skipped-track label."""
+    cleaned = error_text.strip()
+    parsed = _YTDLP_ERROR_DETAIL_RE.search(cleaned)
+    if not parsed:
+        return cleaned
+    video_id, reason = parsed.groups()
+    summary = f"{video_id} — {reason.strip()}"
+    if _YOUTUBE_VIDEO_ID_RE.fullmatch(video_id):
+        watch_url = f"https://www.youtube.com/watch?v={video_id}"
+        return f"{summary} ({watch_url})"
+    return summary
+
+
+def _enrich_skipped_titles(skipped_titles: list[str], captured_errors: list[str]) -> list[str]:
+    """Merge skipped titles with detailed yt-dlp errors, preferring detailed entries."""
+    enriched: list[str] = []
+    seen: set[str] = set()
+    for error_text in captured_errors:
+        label = _format_skipped_from_error(error_text)
+        if label in seen:
+            continue
+        enriched.append(label)
+        seen.add(label)
+    for title in skipped_titles:
+        if title == "(unknown)" or title in seen:
+            continue
+        enriched.append(title)
+        seen.add(title)
+    if enriched:
+        return enriched
+    return skipped_titles
+
+
 def _is_auth_gated_error(exc: DownloadError) -> bool:
     """Return True when the yt-dlp error text indicates auth-protected content."""
     return _error_text_is_auth_gated(str(exc))
@@ -378,7 +417,10 @@ def download_youtube_audio(
         has_cookie_source=has_cookie_source,
     )
     playlist_title = extraction.playlist_title
-    skipped_titles = extraction.skipped_titles
+    skipped_titles = _enrich_skipped_titles(
+        extraction.skipped_titles,
+        extraction.final_attempt_errors,
+    )
 
     added: list[Path] = []
     for path in sorted(target_dir.iterdir()):
