@@ -232,3 +232,4 @@ profiles/*
 !profiles/.gitkeep
 controller_state.json
 __pycache__/
+www.youtube.com_cookies.txt
