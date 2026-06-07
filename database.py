@@ -44,7 +44,7 @@ def _normalize_search_text(raw_text: str) -> str:
 
 
 def _extract_artist_from_song_name(song_name: str) -> str:
-    """Extract an artist-like prefix from filenames such as Artist_-_Song_Title."""
+    """Extract an artist-like prefix from titles split by dash separators."""
     parts = re.split(r"(?:_+-+_+|\s+-+\s+|\s+[–—]+\s+)", song_name, maxsplit=1)
     if len(parts) < 2:
         return ""
