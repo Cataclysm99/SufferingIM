@@ -76,7 +76,11 @@ def _normalized_cookie_mode() -> str:
     mode = YTDLP_COOKIE_MODE.casefold().strip()
     if mode in _COOKIE_MODES:
         return mode
-    log.warning("yt-dlp auth: invalid YTDLP_COOKIE_MODE '%s'; using 'fallback'.", YTDLP_COOKIE_MODE)
+    log.warning(
+        "yt-dlp auth: invalid YTDLP_COOKIE_MODE '%s'; expected 'always', 'fallback', "
+        "or 'off'. Using 'fallback'.",
+        YTDLP_COOKIE_MODE,
+    )
     return "fallback"
 
 
