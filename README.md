@@ -220,8 +220,6 @@ For more detail on cookie export see the official yt-dlp docs:
 
 ---
 
-
-
 - `/controller` – post control panel
 - `/helpless` – DM a quick tutorial and command list
 - `/helpless_manager` – DM the extended manager tutorial (Music Manager)

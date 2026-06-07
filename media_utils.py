@@ -87,11 +87,15 @@ def _cookie_file_diagnostics() -> tuple[bool, str]:
         return False, f"yt-dlp auth: could not read cookie file {cookie_path}: {exc}"
 
     cookie_rows = [line for line in lines if line and not line.startswith("#")]
-    youtube_rows = [line for line in cookie_rows if "youtube.com" in line]
+    cookie_entries = [row.split("\t") for row in cookie_rows]
+    youtube_rows = [
+        parts
+        for parts in cookie_entries
+        if len(parts) >= 7 and parts[0].lstrip(".").lower() in _YOUTUBE_HOSTS
+    ]
     cookie_names = {
         parts[5]
-        for parts in (row.split("\t") for row in youtube_rows)
-        if len(parts) >= 7
+        for parts in youtube_rows
     }
     matched_names = sorted(name for name in _AUTH_COOKIE_NAMES if name in cookie_names)
     details = (
