@@ -216,3 +216,20 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Music bot runtime files
+.env
+songs.db
+songs/*
+!songs/.gitkeep
+ads/*
+!ads/.gitkeep
+dj_events/*
+!dj_events/.gitkeep
+!dj_events/*/
+!dj_events/*/.gitkeep
+profiles/*
+!profiles/.gitkeep
+controller_state.json
+__pycache__/
+www.youtube.com_cookies.txt
