@@ -145,16 +145,51 @@ On every transition to next track:
 
 By default the bot downloads public YouTube videos without any sign-in. If a playlist
 contains **private, age-restricted, or region-locked** videos, yt-dlp needs your YouTube
-cookies so it can authenticate on your behalf. Without cookies those tracks are skipped
-with a `⚠️ Skipped unavailable track` warning and the rest of the playlist still imports.
+credentials so it can authenticate on your behalf. Without authentication those tracks are
+skipped with a `⚠️ Skipped unavailable track` warning and the rest of the playlist still imports.
 
-There are two ways to supply cookies. Pick whichever suits your setup.
+There are three authentication options. **Option A (OAuth2) is recommended for server deployments**
+because it never expires — pick whichever suits your setup.
 
 ---
 
-### Option A – Browser cookie file (recommended for servers / headless hosts)
+### Option A – OAuth2 (recommended for servers, permanent auth)
+
+The [`yt-dlp-youtube-oauth2`](https://github.com/coletdjnz/yt-dlp-youtube-oauth2) plugin adds
+OAuth2 support to yt-dlp. You authenticate once via a device-code flow and the refresh token is
+stored locally — it auto-renews on every use and never needs manual updating.
+
+1. **Install the plugin** (in the same Python environment as the bot):
+   ```
+   pip install yt-dlp-youtube-oauth2
+   ```
+
+2. **Authenticate once** (run this in a terminal — your browser is not needed on the server):
+   ```
+   yt-dlp --username oauth2 --password "" https://www.youtube.com
+   ```
+   yt-dlp will print a URL and a short code. Open the URL in any browser, sign in to your
+   Google account, enter the code, and approve access. You only do this once per machine.
+
+3. **Enable OAuth2** in your `.env`:
+   ```
+   YTDLP_OAUTH2=true
+   ```
+
+4. **Restart the bot.** It will now use OAuth2 for all authenticated requests. The token
+   auto-refreshes and the session survives server reboots indefinitely.
+
+> **Why OAuth2 over cookies?** Unlike browser cookie exports (which tie to a specific
+> browser session and expire when Google invalidates the session), OAuth2 refresh tokens
+> are long-lived and designed for server use. You never need to export cookies again.
+
+---
+
+### Option B – Browser cookie file + `/update_cookies` Discord command
 
 This exports a snapshot of your cookies from a browser you are already signed in to.
+When cookies expire, use the `/update_cookies` Discord command to replace the file from
+any device — no SSH access to the server is required.
 
 1. **Install a browser extension** that exports cookies in Netscape format:
    - Chrome / Edge / Brave: [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
@@ -171,13 +206,16 @@ This exports a snapshot of your cookies from a browser you are already signed in
    YTDLP_COOKIES_FILE=/home/user/yt-cookies.txt
    ```
 
-> **Tip:** Cookie files expire when your YouTube session expires. Re-export from the
-> browser if downloads start failing again. Keep the file out of version control — add
-> its path to `.gitignore`.
+5. **Refreshing cookies later:** when downloads start failing again, re-export the
+   cookies.txt from your browser and use the `/update_cookies` Discord command
+   (Music Manager only) to upload the new file. The bot replaces the server-side
+   file instantly — no SSH or restart required.
+
+> **Tip:** Keep the file out of version control — add its path to `.gitignore`.
 
 ---
 
-### Option B – Live browser cookie extraction (easiest for local machines)
+### Option C – Live browser cookie extraction (easiest for local machines)
 
 yt-dlp can read cookies directly from an installed browser's profile on the same machine
 the bot is running on. No file export needed, but the browser must be installed locally.
@@ -193,7 +231,7 @@ Supported values: `chrome`, `chromium`, `firefox`, `edge`, `opera`, `safari`, `b
 When this is set it takes **priority over** `YTDLP_COOKIES_FILE`.
 
 > **Note for Linux servers:** Chrome/Chromium live-cookie extraction requires a running
-> display or a keyring daemon. If you hit errors, prefer Option A (cookie file) instead.
+> display or a keyring daemon. If you hit errors, prefer Option A or B instead.
 
 ---
 
@@ -239,6 +277,7 @@ For more detail on cookie export see the official yt-dlp docs:
 - `/upload_song` – add songs from attachment, YouTube link(s), or both (Music Manager)
 - `/upload_ad` – add ads from attachment, YouTube link(s), or both (Music Manager)
 - `/upload_broadcast` – add DJ broadcasts from attachment, YouTube link(s), or both (Music Manager)
+- `/update_cookies` – upload a fresh cookies.txt to replace the server-side file instantly (Music Manager)
 - `/playlist`, `/playlist_all`, `/search`, `/genres_today`
 - `/ad_list`, `/broadcast_list` (Music Manager)
 - `/toggle_song`, `/toggle_song_id` (Music Manager)

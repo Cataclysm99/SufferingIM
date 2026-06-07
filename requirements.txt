@@ -3,3 +3,6 @@ python-dotenv>=1.0.0
 PyNaCl>=1.5.0
 yt-dlp>=2026.3.17
 imageio-ffmpeg>=0.6.0
+# Optional: persistent OAuth2 auth for private/age-restricted YouTube videos (no cookie file needed)
+# Install with: pip install yt-dlp-youtube-oauth2
+# Then set YTDLP_OAUTH2=true in your .env and run the one-time device-code setup.

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -15,6 +16,7 @@ from config import (
     YTDLP_COOKIE_MODE,
     YTDLP_COOKIES_FILE,
     YTDLP_COOKIES_FROM_BROWSER,
+    YTDLP_OAUTH2,
 )
 
 _URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
@@ -35,6 +37,7 @@ _AUTH_COOKIE_NAMES = (
     "__Secure-3PSID",
 )
 _COOKIE_MODES = frozenset({"always", "fallback", "off"})
+_AUTH_COOKIE_EXPIRY_WARNING_DAYS = 14
 _AUTH_GATED_ERROR_HINTS = (
     "private video",
     "this video is private",
@@ -98,8 +101,8 @@ def _normalized_cookie_mode() -> str:
 
 
 def _has_cookie_source() -> bool:
-    """Return True when either cookie source is configured."""
-    return bool(YTDLP_COOKIES_FROM_BROWSER or YTDLP_COOKIES_FILE)
+    """Return True when any auth source is configured."""
+    return bool(YTDLP_OAUTH2 or YTDLP_COOKIES_FROM_BROWSER or YTDLP_COOKIES_FILE)
 
 
 def _build_ydl_opts(target_dir: Path, noplaylist: bool, include_cookies: bool) -> dict:
@@ -113,10 +116,14 @@ def _build_ydl_opts(target_dir: Path, noplaylist: bool, include_cookies: bool) -
         "outtmpl": str(target_dir / "%(title).200B-%(id)s.%(ext)s"),
         "ignoreerrors": True,
     }
-    if include_cookies and YTDLP_COOKIES_FROM_BROWSER:
-        opts["cookiesfrombrowser"] = (YTDLP_COOKIES_FROM_BROWSER,)
-    elif include_cookies and YTDLP_COOKIES_FILE:
-        opts["cookiefile"] = YTDLP_COOKIES_FILE
+    if include_cookies:
+        if YTDLP_OAUTH2:
+            opts["username"] = "oauth2"
+            opts["password"] = ""
+        elif YTDLP_COOKIES_FROM_BROWSER:
+            opts["cookiesfrombrowser"] = (YTDLP_COOKIES_FROM_BROWSER,)
+        elif YTDLP_COOKIES_FILE:
+            opts["cookiefile"] = YTDLP_COOKIES_FILE
     return opts
 
 
@@ -160,6 +167,64 @@ def _log_captured_failures(
     log.warning("yt-dlp %s failed for %s: %s", attempt_label, url, fallback_error)
 
 
+def _expiry_warnings(youtube_rows: list[list[str]], matched: set[str]) -> list[str]:
+    """Return human-readable expiry notices for matched auth cookie rows."""
+    now = time.time()
+    warnings: list[str] = []
+    for parts in youtube_rows:
+        if parts[5] not in matched:
+            continue
+        try:
+            exp = int(parts[4])
+        except (ValueError, IndexError):
+            continue
+        if exp == 0:
+            continue
+        days_left = (exp - now) / 86400
+        if days_left < 0:
+            warnings.append(f"`{parts[5]}` **expired**")
+        elif days_left < _AUTH_COOKIE_EXPIRY_WARNING_DAYS:
+            warnings.append(f"`{parts[5]}` expires in {int(days_left)}d")
+    return warnings
+
+
+def parse_cookie_file_info(content: str) -> tuple[bool, str, list[str]]:
+    """Validate and summarise Netscape cookies file content.
+
+    Returns ``(is_valid, summary_message, auth_cookie_names_found)``.
+    *is_valid* is False when the Netscape header is missing or no YouTube
+    cookies are present at all.  The summary is always human-readable.
+    """
+    lines = content.splitlines()
+    is_netscape = next(
+        (line for line in lines if line.strip()), ""
+    ).startswith("# Netscape HTTP Cookie File")
+    youtube_rows = [
+        parts
+        for line in lines
+        if line and not line.startswith("#")
+        for parts in (line.split("\t"),)
+        if len(parts) >= 7 and parts[0].lstrip(".").lower() in _YOUTUBE_HOSTS
+    ]
+    matched = sorted(
+        name for name in _AUTH_COOKIE_NAMES
+        if any(p[5] == name for p in youtube_rows)
+    )
+    if not is_netscape:
+        return False, "Missing `# Netscape HTTP Cookie File` header.", []
+    if not youtube_rows:
+        return False, "No YouTube cookie rows found.", []
+    msg_parts = [f"{len(youtube_rows)} YouTube cookie row(s)."]
+    if matched:
+        msg_parts.append(f"Auth cookies found: `{'`, `'.join(matched)}`.")
+    else:
+        msg_parts.append("⚠️ No recognised YouTube auth cookies found.")
+    expiry = _expiry_warnings(youtube_rows, set(matched))
+    if expiry:
+        msg_parts.append("⚠️ Expiry notice: " + "; ".join(expiry) + ".")
+    return True, " ".join(msg_parts), matched
+
+
 def _cookie_file_diagnostics() -> tuple[bool, str]:
     """Return a startup status message for the configured cookie file."""
     cookie_path = Path(YTDLP_COOKIES_FILE).expanduser()
@@ -168,30 +233,12 @@ def _cookie_file_diagnostics() -> tuple[bool, str]:
     if not cookie_path.is_file():
         return False, f"yt-dlp auth: cookie path is not a file: {cookie_path}"
     try:
-        lines = cookie_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        content = cookie_path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         return False, f"yt-dlp auth: could not read cookie file {cookie_path}: {exc}"
-
-    cookie_rows = [line for line in lines if line and not line.startswith("#")]
-    cookie_entries = [row.split("\t") for row in cookie_rows]
-    youtube_rows = [
-        parts
-        for parts in cookie_entries
-        if len(parts) >= 7 and parts[0].lstrip(".").lower() in _YOUTUBE_HOSTS
-    ]
-    cookie_names = {
-        parts[5]
-        for parts in youtube_rows
-    }
-    matched_names = sorted(name for name in _AUTH_COOKIE_NAMES if name in cookie_names)
-    details = (
-        f"yt-dlp auth: cookie file readable: {cookie_path} "
-        f"({len(youtube_rows)} youtube cookie row(s)"
-    )
-    if matched_names:
-        joined_names = ", ".join(matched_names)
-        return True, f"{details}; auth cookies: {joined_names})"
-    return True, f"{details}; auth cookies not detected)"
+    is_valid, summary, _ = parse_cookie_file_info(content)
+    prefix = f"yt-dlp auth: cookie file {cookie_path}: "
+    return is_valid, prefix + summary
 
 
 def log_ytdlp_auth_diagnostics() -> None:
@@ -204,10 +251,15 @@ def log_ytdlp_auth_diagnostics() -> None:
         if has_cookie_source:
             log.info("yt-dlp auth: cookie source configured but disabled by mode 'off'.")
         else:
-            log.info("yt-dlp auth: no cookie source configured.")
+            log.info("yt-dlp auth: no auth source configured.")
         return
 
-    if YTDLP_COOKIES_FROM_BROWSER:
+    if YTDLP_OAUTH2:
+        log.info(
+            "yt-dlp auth: OAuth2 mode enabled (yt-dlp-youtube-oauth2 plugin). "
+            "Ensure the plugin is installed and the one-time device-code setup has been run."
+        )
+    elif YTDLP_COOKIES_FROM_BROWSER:
         log.info(
             "yt-dlp auth: using live browser cookies from '%s'.",
             YTDLP_COOKIES_FROM_BROWSER,

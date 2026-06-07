@@ -22,7 +22,12 @@ from app_bot import (
     send_chunked_interaction_message,
 )
 from broadcast import DAYS as DJ_DAYS
-from config import ADS_DIR, ALLOWED_EXTENSIONS, DJ_EVENTS_DIR, SONGS_DIR
+from config import (
+    ADS_DIR,
+    ALLOWED_EXTENSIONS,
+    DJ_EVENTS_DIR,
+    SONGS_DIR,
+)
 from database import (
     activate_song,
     add_ad,
@@ -40,6 +45,7 @@ from database import (
     sync_broadcasts_from_disk,
 )
 from genre_commands import register_genre_commands
+from cookie_commands import register_cookie_commands
 from media_utils import download_youtube_audio, extract_urls, is_youtube_url
 from views import (
     REACT_CANCEL,
@@ -406,10 +412,7 @@ def _register_controller_commands(bot: MusicBot) -> None:
 
 
 async def _send_toggle_song_result(
-    interaction: discord.Interaction,
-    song: dict,
-    *,
-    song_id: int,
+    interaction: discord.Interaction, song: dict, *, song_id: int
 ) -> None:
     """Toggle a song's availability and send the appropriate response."""
     if song.get("available", 1):
@@ -946,9 +949,7 @@ async def _start_purge_confirmation(
     bot.purge_code = confirmation_code
 
     print("\n" + "=" * 60, flush=True)
-    print(
-        f"[PURGE CONFIRM] One-time password: {confirmation_code}", flush=True
-    )  # noqa: S106
+    print(f"[PURGE CONFIRM] One-time password: {confirmation_code}", flush=True)  # noqa: S106
     print("=" * 60 + "\n", flush=True)
 
     await interaction.response.send_modal(PurgeSongsConfirmModal())
@@ -995,3 +996,4 @@ def register_commands(bot: MusicBot) -> None:
     _register_library_commands(bot)
     _register_playback_commands(bot)
     _register_persona_commands(bot)
+    register_cookie_commands(bot)

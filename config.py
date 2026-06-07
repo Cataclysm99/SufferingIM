@@ -117,6 +117,13 @@ YTDLP_COOKIE_MODE: str = os.getenv("YTDLP_COOKIE_MODE", "fallback").strip().lowe
 # Leave blank to skip the startup auth probe.
 YTDLP_AUTH_TEST_URL: str = os.getenv("YTDLP_AUTH_TEST_URL", "").strip()
 
+# Set to true to authenticate via the yt-dlp-youtube-oauth2 plugin.
+# Install:           pip install yt-dlp-youtube-oauth2
+# Authenticate once: yt-dlp --username oauth2 --password "" <any-youtube-url>
+# After the one-time device-code setup the token auto-refreshes; no cookie file needed.
+# When enabled, OAuth2 takes priority over YTDLP_COOKIES_FROM_BROWSER / YTDLP_COOKIES_FILE.
+YTDLP_OAUTH2: bool = os.getenv("YTDLP_OAUTH2", "").strip().lower() in ("1", "true", "yes")
+
 # ── FFmpeg options ────────────────────────────────────────────────────────────
 FFMPEG_BEFORE_OPTIONS: str = (
     "-nostdin -thread_queue_size 1024 "
