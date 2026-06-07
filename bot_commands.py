@@ -45,7 +45,6 @@ from database import (
     sync_broadcasts_from_disk,
 )
 from genre_commands import register_genre_commands
-from cookie_commands import register_cookie_commands
 from media_utils import download_youtube_audio, extract_urls, is_youtube_url
 from views import (
     REACT_CANCEL,
@@ -996,4 +995,3 @@ def register_commands(bot: MusicBot) -> None:
     _register_library_commands(bot)
     _register_playback_commands(bot)
     _register_persona_commands(bot)
-    register_cookie_commands(bot)

@@ -99,30 +99,17 @@ HEAVEN_BANNER_PATH: str = os.getenv(
 CONTROLLER_STATE_PATH: Path = BASE_DIR / "controller_state.json"
 
 # ── yt-dlp authentication ─────────────────────────────────────────────────────
-# Path to a Netscape-format cookies file exported from your browser.
-# Leave blank to disable cookie-based auth.
-YTDLP_COOKIES_FILE: str = os.getenv("YTDLP_COOKIES_FILE", "").strip()
-
-# Browser to pull live cookies from (e.g. "chrome", "firefox", "edge", "safari").
-# Leave blank to disable. Overrides YTDLP_COOKIES_FILE when set.
-YTDLP_COOKIES_FROM_BROWSER: str = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
-
-# Cookie usage mode for yt-dlp requests:
-# - "always": always include configured cookies
-# - "fallback": try anonymous first, then retry with cookies for auth-gated failures
-# - "off": never use cookies, even when configured
-YTDLP_COOKIE_MODE: str = os.getenv("YTDLP_COOKIE_MODE", "fallback").strip().lower()
-
-# Optional YouTube URL used to verify age-gated auth at startup.
-# Leave blank to skip the startup auth probe.
-YTDLP_AUTH_TEST_URL: str = os.getenv("YTDLP_AUTH_TEST_URL", "").strip()
-
 # Set to true to authenticate via the yt-dlp-youtube-oauth2 plugin.
 # Install:           pip install yt-dlp-youtube-oauth2
 # Authenticate once: yt-dlp --username oauth2 --password "" <any-youtube-url>
 # After the one-time device-code setup the token auto-refreshes; no cookie file needed.
-# When enabled, OAuth2 takes priority over YTDLP_COOKIES_FROM_BROWSER / YTDLP_COOKIES_FILE.
+# Downloads are first attempted anonymously; OAuth2 is used as a fallback for
+# private, age-restricted, or members-only content.
 YTDLP_OAUTH2: bool = os.getenv("YTDLP_OAUTH2", "").strip().lower() in ("1", "true", "yes")
+
+# Optional YouTube URL used to verify age-gated auth at startup.
+# Leave blank to skip the startup auth probe.
+YTDLP_AUTH_TEST_URL: str = os.getenv("YTDLP_AUTH_TEST_URL", "").strip()
 
 # ── FFmpeg options ────────────────────────────────────────────────────────────
 FFMPEG_BEFORE_OPTIONS: str = (
