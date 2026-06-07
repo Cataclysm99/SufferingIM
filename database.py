@@ -388,11 +388,17 @@ def add_song(
     added_by: str = "",
     metadata: dict | None = None,
 ) -> int | None:
-    """Insert a new song and return its ID, or None when it is a duplicate."""
+    """Insert a new song and return its ID, or None when it is an active duplicate."""
     if _is_reserved_media_filename(filename):
         raise ValueError(f"Reserved media filename is not allowed: {filename}")
     metadata = metadata or {}
     content_hash = str(metadata.get("content_hash", "")).strip()
+    genres_metadata = metadata.get("genres")
+    genres_value = (
+        serialize_genre_names(str(genres_metadata))
+        if genres_metadata is not None
+        else None
+    )
     if not content_hash:
         path = SONGS_DIR / filename
         if path.is_file():
@@ -400,10 +406,48 @@ def add_song(
     with _get_conn() as conn:
         if content_hash:
             duplicate = conn.execute(
-                "SELECT id FROM songs WHERE content_hash = ? LIMIT 1",
+                "SELECT id, available FROM songs WHERE content_hash = ? LIMIT 1",
                 (content_hash,),
             ).fetchone()
             if duplicate is not None:
+                duplicate_id = int(duplicate["id"])
+                if int(duplicate["available"]) == 0:
+                    if genres_value is None:
+                        conn.execute(
+                            """
+                            UPDATE songs
+                            SET name = ?,
+                                artist = ?,
+                                filename = ?,
+                                added_by = ?,
+                                available = 1
+                            WHERE id = ?
+                            """,
+                            (name, artist, filename, added_by, duplicate_id),
+                        )
+                    else:
+                        conn.execute(
+                            """
+                            UPDATE songs
+                            SET name = ?,
+                                artist = ?,
+                                genres = ?,
+                                filename = ?,
+                                added_by = ?,
+                                available = 1
+                            WHERE id = ?
+                            """,
+                            (
+                                name,
+                                artist,
+                                genres_value,
+                                filename,
+                                added_by,
+                                duplicate_id,
+                            ),
+                        )
+                    conn.commit()
+                    return duplicate_id
                 return None
         cursor = conn.execute(
             (
@@ -413,7 +457,7 @@ def add_song(
             (
                 name,
                 artist,
-                serialize_genre_names(str(metadata.get("genres", ""))),
+                genres_value or "",
                 filename,
                 added_by,
                 content_hash,
