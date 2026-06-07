@@ -148,12 +148,13 @@ contains **private, age-restricted, or region-locked** videos, yt-dlp needs your
 credentials so it can authenticate on your behalf. Without authentication those tracks are
 skipped with a `⚠️ Skipped unavailable track` warning and the rest of the playlist still imports.
 
-There are three authentication options. **Option A (OAuth2) is recommended for server deployments**
-because it never expires — pick whichever suits your setup.
+Downloads are always tried anonymously first. If yt-dlp reports an auth-gated failure
+(private / sign-in / age-restricted), the request is automatically retried with OAuth2.
+If the retry also fails, errors are logged and surfaced to the user.
 
 ---
 
-### Option A – OAuth2 (recommended for servers, permanent auth)
+### OAuth2 setup (recommended for servers, permanent auth)
 
 The [`yt-dlp-youtube-oauth2`](https://github.com/coletdjnz/yt-dlp-youtube-oauth2) plugin adds
 OAuth2 support to yt-dlp. You authenticate once via a device-code flow and the refresh token is
@@ -176,81 +177,14 @@ stored locally — it auto-renews on every use and never needs manual updating.
    YTDLP_OAUTH2=true
    ```
 
-4. **Restart the bot.** It will now use OAuth2 for all authenticated requests. The token
-   auto-refreshes and the session survives server reboots indefinitely.
-
-> **Why OAuth2 over cookies?** Unlike browser cookie exports (which tie to a specific
-> browser session and expire when Google invalidates the session), OAuth2 refresh tokens
-> are long-lived and designed for server use. You never need to export cookies again.
-
----
-
-### Option B – Browser cookie file + `/update_cookies` Discord command
-
-This exports a snapshot of your cookies from a browser you are already signed in to.
-When cookies expire, use the `/update_cookies` Discord command to replace the file from
-any device — no SSH access to the server is required.
-
-1. **Install a browser extension** that exports cookies in Netscape format:
-   - Chrome / Edge / Brave: [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc)
-   - Firefox: [cookies.txt](https://addons.mozilla.org/en-US/firefox/addon/cookies-txt/)
-
-2. **Sign in to YouTube** in that browser.
-
-3. **Export cookies** for `youtube.com`:
-   - In the extension, navigate to `youtube.com`, click the extension icon, and export.
-   - Save the file somewhere on the host machine, e.g. `/home/user/yt-cookies.txt`.
-
-4. **Set the env var** in your `.env`:
-   ```
-   YTDLP_COOKIES_FILE=/home/user/yt-cookies.txt
-   ```
-
-5. **Refreshing cookies later:** when downloads start failing again, re-export the
-   cookies.txt from your browser and use the `/update_cookies` Discord command
-   (Music Manager only) to upload the new file. The bot replaces the server-side
-   file instantly — no SSH or restart required.
-
-> **Tip:** Keep the file out of version control — add its path to `.gitignore`.
-
----
-
-### Option C – Live browser cookie extraction (easiest for local machines)
-
-yt-dlp can read cookies directly from an installed browser's profile on the same machine
-the bot is running on. No file export needed, but the browser must be installed locally.
-
-Set `YTDLP_COOKIES_FROM_BROWSER` in your `.env` to the name of your browser:
-
-```
-YTDLP_COOKIES_FROM_BROWSER=chrome
-```
-
-Supported values: `chrome`, `chromium`, `firefox`, `edge`, `opera`, `safari`, `brave`, `vivaldi`
-
-When this is set it takes **priority over** `YTDLP_COOKIES_FILE`.
-
-> **Note for Linux servers:** Chrome/Chromium live-cookie extraction requires a running
-> display or a keyring daemon. If you hit errors, prefer Option A or B instead.
-
----
-
-### Cookie usage mode
-
-Control when yt-dlp uses configured cookies with `YTDLP_COOKIE_MODE`:
-
-- `fallback` (default): try anonymous requests first, then retry with cookies only when
-  yt-dlp returns an auth-gated failure (private/sign-in/age-restricted style errors)
-- `always`: always send configured cookies
-- `off`: never send cookies, even if cookie sources are configured
-
-For rate-limit style failures, fallback mode does **not** retry with cookies.
+4. **Restart the bot.** It will now use OAuth2 as a fallback for private and age-restricted
+   content. The token auto-refreshes and the session survives server reboots indefinitely.
 
 ---
 
 ### Verifying it works
 
-After setting either option, try adding a private or members-only playlist via the
+After enabling OAuth2, try adding a private or members-only playlist via the
 **Add Song** modal or `/upload_song`. Songs that are still unavailable (deleted, blocked
 in your region even with auth, etc.) will be skipped with a warning, while the rest
 import normally.
@@ -262,12 +196,8 @@ YTDLP_AUTH_TEST_URL=https://www.youtube.com/watch?v=...
 ```
 
 Use one age-restricted YouTube URL that your account should be able to access.
-On startup the bot will log whether the cookie source was detected, whether the
-cookie file was readable, and whether the age-check probe succeeded.
-
-For more detail on cookie export see the official yt-dlp docs:
-- https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp
-- https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies
+On startup the bot will log whether OAuth2 is configured and whether the age-check probe
+succeeded.
 
 ---
 
@@ -277,7 +207,6 @@ For more detail on cookie export see the official yt-dlp docs:
 - `/upload_song` – add songs from attachment, YouTube link(s), or both (Music Manager)
 - `/upload_ad` – add ads from attachment, YouTube link(s), or both (Music Manager)
 - `/upload_broadcast` – add DJ broadcasts from attachment, YouTube link(s), or both (Music Manager)
-- `/update_cookies` – upload a fresh cookies.txt to replace the server-side file instantly (Music Manager)
 - `/playlist`, `/playlist_all`, `/search`, `/genres_today`
 - `/ad_list`, `/broadcast_list` (Music Manager)
 - `/toggle_song`, `/toggle_song_id` (Music Manager)
@@ -306,6 +235,5 @@ Buttons mirror the same core actions.
   - `SUFFERING_BOT_NAME`, `HEAVEN_BOT_NAME`
   - optional avatar/banner paths
 - YouTube authentication (for private / restricted videos):
-  - `YTDLP_COOKIES_FILE` – path to a Netscape cookies file
-  - `YTDLP_COOKIES_FROM_BROWSER` – browser name (`chrome`, `firefox`, `edge`, etc.); takes priority over the file option
-  - `YTDLP_COOKIE_MODE` – cookie usage mode (`fallback`, `always`, or `off`)
+  - `YTDLP_OAUTH2=true` – enable OAuth2 fallback (anonymous first, then OAuth2 on auth-gated failures)
+  - `YTDLP_AUTH_TEST_URL` – optional startup age-check probe URL
