@@ -42,7 +42,7 @@ class DownloadResult(NamedTuple):
 def _build_ydl_opts(target_dir: Path, noplaylist: bool) -> dict:
     """Build yt-dlp options dict, including cookies and error-handling settings."""
     opts: dict = {
-        "format": "bestaudio/best",
+        "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio[ext=opus]/bestaudio/best",
         "noplaylist": noplaylist,
         "quiet": True,
         "no_warnings": True,
