@@ -107,6 +107,46 @@ def _build_ydl_opts(target_dir: Path, noplaylist: bool, include_cookies: bool) -
     return opts
 
 
+class _YTDLPLogCapture:
+    """Capture yt-dlp error lines so callers can defer logging until retries are exhausted."""
+
+    def __init__(self) -> None:
+        self.errors: list[str] = []
+
+    @staticmethod
+    def debug(message: str, *args: object) -> None:
+        """Ignore debug output from yt-dlp."""
+        del message, args
+
+    @staticmethod
+    def warning(message: str, *args: object) -> None:
+        """Ignore warning output from yt-dlp."""
+        del message, args
+
+    def error(self, message: str, *args: object) -> None:
+        """Capture error output from yt-dlp."""
+        if args:
+            try:
+                message = message % args
+            except (TypeError, ValueError):
+                message = f"{message} {' '.join(str(arg) for arg in args)}"
+        self.errors.append(str(message))
+
+
+def _log_captured_failures(
+    url: str,
+    attempt_label: str,
+    captured_errors: list[str],
+    fallback_error: DownloadError,
+) -> None:
+    """Log captured yt-dlp errors for one attempt, or fallback to the raised exception."""
+    if captured_errors:
+        for error_text in captured_errors:
+            log.warning("yt-dlp %s failed for %s: %s", attempt_label, url, error_text)
+        return
+    log.warning("yt-dlp %s failed for %s: %s", attempt_label, url, fallback_error)
+
+
 def _cookie_file_diagnostics() -> tuple[bool, str]:
     """Return a startup status message for the configured cookie file."""
     cookie_path = Path(YTDLP_COOKIES_FILE).expanduser()
@@ -230,6 +270,44 @@ def _is_auth_gated_error(exc: DownloadError) -> bool:
     return any(hint in error_text for hint in _AUTH_GATED_ERROR_HINTS)
 
 
+def _extract_with_cookie_strategy(
+    url: str,
+    target_dir: Path,
+    noplaylist: bool,
+    cookie_mode: str,
+    has_cookie_source: bool,
+) -> tuple[str | None, list[str]]:
+    """Extract with configured cookie mode and fallback retry behavior."""
+    use_cookies = cookie_mode == "always" and has_cookie_source
+    first_attempt_logs = _YTDLPLogCapture()
+    first_opts = _build_ydl_opts(target_dir, noplaylist, include_cookies=use_cookies)
+    first_opts["logger"] = first_attempt_logs
+
+    try:
+        return _extract_download_info(url, first_opts)
+    except DownloadError as first_exc:
+        first_error = first_exc
+        should_retry_with_cookies = (
+            cookie_mode == "fallback"
+            and has_cookie_source
+            and _is_auth_gated_error(first_exc)
+        )
+        if not should_retry_with_cookies:
+            _log_captured_failures(url, "initial attempt", first_attempt_logs.errors, first_exc)
+            raise
+
+    log.info("yt-dlp download retrying with cookies after auth-gated failure: %s", url)
+    retry_logs = _YTDLPLogCapture()
+    retry_opts = _build_ydl_opts(target_dir, noplaylist, include_cookies=True)
+    retry_opts["logger"] = retry_logs
+    try:
+        return _extract_download_info(url, retry_opts)
+    except DownloadError as retry_exc:
+        _log_captured_failures(url, "initial attempt", first_attempt_logs.errors, first_error)
+        _log_captured_failures(url, "cookie retry", retry_logs.errors, retry_exc)
+        raise
+
+
 def download_youtube_audio(
     url: str,
     target_dir: Path,
@@ -245,23 +323,13 @@ def download_youtube_audio(
     before = {path.name for path in target_dir.iterdir() if path.is_file()}
     cookie_mode = _normalized_cookie_mode()
     has_cookie_source = _has_cookie_source()
-    use_cookies = cookie_mode == "always" and has_cookie_source
-    ydl_opts = _build_ydl_opts(target_dir, noplaylist, include_cookies=use_cookies)
-
-    try:
-        playlist_title, skipped_titles = _extract_download_info(url, ydl_opts)
-    except DownloadError as exc:
-        should_retry_with_cookies = (
-            cookie_mode == "fallback"
-            and has_cookie_source
-            and _is_auth_gated_error(exc)
-        )
-        if should_retry_with_cookies:
-            log.info("yt-dlp download retrying with cookies after auth-gated failure: %s", url)
-            retry_opts = _build_ydl_opts(target_dir, noplaylist, include_cookies=True)
-            playlist_title, skipped_titles = _extract_download_info(url, retry_opts)
-        else:
-            raise
+    playlist_title, skipped_titles = _extract_with_cookie_strategy(
+        url=url,
+        target_dir=target_dir,
+        noplaylist=noplaylist,
+        cookie_mode=cookie_mode,
+        has_cookie_source=has_cookie_source,
+    )
 
     added: list[Path] = []
     for path in sorted(target_dir.iterdir()):
