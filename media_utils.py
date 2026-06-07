@@ -270,12 +270,22 @@ def _is_rate_limited_error(exc: DownloadError) -> bool:
     return any(hint in error_text for hint in _RATE_LIMIT_ERROR_HINTS)
 
 
+def _error_text_is_auth_gated(error_text: str) -> bool:
+    """Return True when an error message indicates auth-protected content."""
+    folded = error_text.casefold()
+    if any(hint in folded for hint in _RATE_LIMIT_ERROR_HINTS):
+        return False
+    return any(hint in folded for hint in _AUTH_GATED_ERROR_HINTS)
+
+
+def _captured_auth_gated_errors(captured_errors: list[str]) -> bool:
+    """Return True when captured yt-dlp errors contain auth-gated failures."""
+    return any(_error_text_is_auth_gated(error_text) for error_text in captured_errors)
+
+
 def _is_auth_gated_error(exc: DownloadError) -> bool:
     """Return True when the yt-dlp error text indicates auth-protected content."""
-    if _is_rate_limited_error(exc):
-        return False
-    error_text = str(exc).casefold()
-    return any(hint in error_text for hint in _AUTH_GATED_ERROR_HINTS)
+    return _error_text_is_auth_gated(str(exc))
 
 
 def _extract_with_cookie_strategy(
@@ -293,11 +303,32 @@ def _extract_with_cookie_strategy(
 
     try:
         playlist_title, skipped_titles = _extract_download_info(url, first_opts)
-        return _ExtractAttemptResult(
-            playlist_title,
-            skipped_titles,
-            first_attempt_logs.errors.copy(),
+        should_retry_with_cookies = (
+            cookie_mode == "fallback"
+            and has_cookie_source
+            and _captured_auth_gated_errors(first_attempt_logs.errors)
         )
+        if not should_retry_with_cookies:
+            return _ExtractAttemptResult(
+                playlist_title,
+                skipped_titles,
+                first_attempt_logs.errors.copy(),
+            )
+        log.info("yt-dlp download retrying with cookies after auth-gated skips: %s", url)
+        retry_logs = _YTDLPLogCapture()
+        retry_opts = _build_ydl_opts(target_dir, noplaylist, include_cookies=True)
+        retry_opts["logger"] = retry_logs
+        try:
+            playlist_title, skipped_titles = _extract_download_info(url, retry_opts)
+            return _ExtractAttemptResult(
+                playlist_title,
+                skipped_titles,
+                retry_logs.errors.copy(),
+            )
+        except DownloadError as retry_exc:
+            _log_captured_failures(url, "initial attempt", first_attempt_logs.errors, retry_exc)
+            _log_captured_failures(url, "cookie retry", retry_logs.errors, retry_exc)
+            raise
     except DownloadError as first_exc:
         should_retry_with_cookies = (
             cookie_mode == "fallback"
