@@ -71,6 +71,14 @@ class DownloadResult(NamedTuple):
     skipped_titles: list[str]
 
 
+class _ExtractAttemptResult(NamedTuple):
+    """Result of yt-dlp extraction attempts before filesystem scan."""
+
+    playlist_title: str | None
+    skipped_titles: list[str]
+    final_attempt_errors: list[str]
+
+
 def _normalized_cookie_mode() -> str:
     """Return the validated cookie usage mode, defaulting invalid values to fallback."""
     mode = YTDLP_COOKIE_MODE.casefold().strip()
@@ -276,7 +284,7 @@ def _extract_with_cookie_strategy(
     noplaylist: bool,
     cookie_mode: str,
     has_cookie_source: bool,
-) -> tuple[str | None, list[str]]:
+) -> _ExtractAttemptResult:
     """Extract with configured cookie mode and fallback retry behavior."""
     use_cookies = cookie_mode == "always" and has_cookie_source
     first_attempt_logs = _YTDLPLogCapture()
@@ -284,9 +292,13 @@ def _extract_with_cookie_strategy(
     first_opts["logger"] = first_attempt_logs
 
     try:
-        return _extract_download_info(url, first_opts)
+        playlist_title, skipped_titles = _extract_download_info(url, first_opts)
+        return _ExtractAttemptResult(
+            playlist_title,
+            skipped_titles,
+            first_attempt_logs.errors.copy(),
+        )
     except DownloadError as first_exc:
-        first_error = first_exc
         should_retry_with_cookies = (
             cookie_mode == "fallback"
             and has_cookie_source
@@ -295,17 +307,21 @@ def _extract_with_cookie_strategy(
         if not should_retry_with_cookies:
             _log_captured_failures(url, "initial attempt", first_attempt_logs.errors, first_exc)
             raise
-
-    log.info("yt-dlp download retrying with cookies after auth-gated failure: %s", url)
-    retry_logs = _YTDLPLogCapture()
-    retry_opts = _build_ydl_opts(target_dir, noplaylist, include_cookies=True)
-    retry_opts["logger"] = retry_logs
-    try:
-        return _extract_download_info(url, retry_opts)
-    except DownloadError as retry_exc:
-        _log_captured_failures(url, "initial attempt", first_attempt_logs.errors, first_error)
-        _log_captured_failures(url, "cookie retry", retry_logs.errors, retry_exc)
-        raise
+        log.info("yt-dlp download retrying with cookies after auth-gated failure: %s", url)
+        retry_logs = _YTDLPLogCapture()
+        retry_opts = _build_ydl_opts(target_dir, noplaylist, include_cookies=True)
+        retry_opts["logger"] = retry_logs
+        try:
+            playlist_title, skipped_titles = _extract_download_info(url, retry_opts)
+            return _ExtractAttemptResult(
+                playlist_title,
+                skipped_titles,
+                retry_logs.errors.copy(),
+            )
+        except DownloadError as retry_exc:
+            _log_captured_failures(url, "initial attempt", first_attempt_logs.errors, first_exc)
+            _log_captured_failures(url, "cookie retry", retry_logs.errors, retry_exc)
+            raise
 
 
 def download_youtube_audio(
@@ -323,13 +339,15 @@ def download_youtube_audio(
     before = {path.name for path in target_dir.iterdir() if path.is_file()}
     cookie_mode = _normalized_cookie_mode()
     has_cookie_source = _has_cookie_source()
-    playlist_title, skipped_titles = _extract_with_cookie_strategy(
+    extraction = _extract_with_cookie_strategy(
         url=url,
         target_dir=target_dir,
         noplaylist=noplaylist,
         cookie_mode=cookie_mode,
         has_cookie_source=has_cookie_source,
     )
+    playlist_title = extraction.playlist_title
+    skipped_titles = extraction.skipped_titles
 
     added: list[Path] = []
     for path in sorted(target_dir.iterdir()):
@@ -337,4 +355,14 @@ def download_youtube_audio(
             continue
         if path.suffix.lower() in ALLOWED_EXTENSIONS:
             added.append(path)
+    if not added and skipped_titles:
+        if extraction.final_attempt_errors:
+            for error_text in extraction.final_attempt_errors:
+                log.warning(
+                    "yt-dlp skipped-only result for %s: %s",
+                    url,
+                    error_text,
+                )
+        else:
+            log.warning("yt-dlp skipped-only result for %s: %s", url, ", ".join(skipped_titles))
     return DownloadResult(added, playlist_title, skipped_titles)
